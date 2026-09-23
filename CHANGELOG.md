@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+### Fixed
+- Recordings saved no video and the review page rendered blank. The video blob was sent
+  from the offscreen document to the service worker via `chrome.runtime.sendMessage`,
+  which serialises as JSON and reduces a Blob to `{}` without raising — the review page
+  then threw in `URL.createObjectURL` and React unmounted the root. The offscreen
+  document now writes the video to IndexedDB directly and messages only a session id.
+- The review page no longer blanks on a malformed record: it guards `instanceof Blob`
+  and is wrapped in an error boundary that shows the failure.
+
 ### Phase 1 — Recording
 - Tab capture via `chrome.tabCapture` + an offscreen `MediaRecorder` (VP9, 720p,
   2.5 Mbps), with captured audio routed back to the speakers so recording does not

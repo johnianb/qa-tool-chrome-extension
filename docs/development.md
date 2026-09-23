@@ -108,3 +108,25 @@ text, in URL query strings. Add a case whenever you find a new hiding place.
 - Do not override `include` in `tsconfig.json`. It extends `.wxt/tsconfig.json`, which
   includes `.wxt/wxt.d.ts`; overriding `include` drops WXT's global declarations and
   `defineBackground` stops resolving.
+
+## Runtime messages are JSON, not structured clone
+
+`chrome.runtime.sendMessage` serialises its payload as JSON. This is not the structured
+clone algorithm that `postMessage` uses, and the difference is silent: a `Blob`, `File`,
+`ArrayBuffer`, `Map` or `Set` arrives at the other end as `{}` with **no error raised**.
+
+This cost us a blank review page once. The video blob was sent from the offscreen
+document to the service worker, arrived as `{}`, was stored as the session's video, and
+then `URL.createObjectURL({})` threw inside a React effect — which unmounts the React
+root, so the symptom was an empty page rather than anything pointing at the cause.
+
+Two rules follow:
+
+- **Never put binary data in a runtime message.** Every extension context shares one
+  origin and therefore one IndexedDB. Write the data where it is produced and send only
+  an id. `src/entrypoints/offscreen/main.ts` does this.
+- **Guard before `URL.createObjectURL`.** `src/entrypoints/review/App.tsx` checks
+  `instanceof Blob`, so a record written by an older build degrades to "no video" rather
+  than taking the page down with it.
+
+`src/core/messages.test.ts` pins the behaviour.

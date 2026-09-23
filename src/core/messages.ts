@@ -16,11 +16,19 @@ export type OffscreenMessage =
   | { type: 'OFFSCREEN_START'; streamId: string; sessionId: string }
   | { type: 'OFFSCREEN_STOP' };
 
-/** offscreen document → worker */
+/**
+ * offscreen document → worker
+ *
+ * Note what is *not* here: the video blob. `chrome.runtime.sendMessage` serialises
+ * with JSON, not structured clone, so a Blob sent through it arrives as `{}` — no
+ * error, just silently empty. The offscreen document shares this extension's origin
+ * and therefore its IndexedDB, so it writes the video itself and only reports that
+ * it is done.
+ */
 export type OffscreenReply =
   | { type: 'RECORDING_STARTED'; sessionId: string }
   | { type: 'RECORDING_FAILED'; sessionId: string; error: string }
-  | { type: 'RECORDING_DATA'; sessionId: string; video: Blob };
+  | { type: 'RECORDING_SAVED'; sessionId: string; bytes: number };
 
 /** content script → worker */
 export type ContentMessage =

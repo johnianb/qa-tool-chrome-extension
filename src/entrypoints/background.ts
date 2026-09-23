@@ -35,8 +35,8 @@ export default defineBackground(() => {
         void popupState().then(sendResponse);
         return true;
 
-      case 'RECORDING_DATA':
-        void onRecordingData(message.sessionId, message.video);
+      case 'RECORDING_SAVED':
+        void onRecordingSaved(message.sessionId, message.bytes);
         return false;
 
       case 'RECORDING_FAILED':
@@ -92,7 +92,8 @@ async function stopRecording(): Promise<{ sessionId: string | null }> {
     session.stoppedAt = Date.now();
   });
 
-  // The offscreen document replies with RECORDING_DATA once the blob is finalised.
+  // The offscreen document writes the video to IndexedDB itself and replies
+  // RECORDING_SAVED; the blob cannot travel through sendMessage (JSON serialisation).
   await chrome.runtime.sendMessage({ type: 'OFFSCREEN_STOP' });
   await clearRecordingState();
   await setBadge('', '#000000');
@@ -100,12 +101,8 @@ async function stopRecording(): Promise<{ sessionId: string | null }> {
   return { sessionId: state.sessionId };
 }
 
-async function onRecordingData(sessionId: string, video: Blob): Promise<void> {
-  await updateSession(sessionId, (session) => {
-    session.video = video;
-    session.status = 'stopped';
-    session.stoppedAt ??= Date.now();
-  });
+async function onRecordingSaved(sessionId: string, bytes: number): Promise<void> {
+  console.info(`[qa-bug-reporter] saved ${sessionId} (${(bytes / 1_048_576).toFixed(1)} MB)`);
   await closeOffscreenDocument();
 }
 

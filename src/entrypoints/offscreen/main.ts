@@ -7,6 +7,7 @@
  * finished blob is handed back to the worker on stop.
  */
 import type { OffscreenMessage, OffscreenReply } from '@/core/messages';
+import { updateSession } from '@/core/storage/db';
 
 let recorder: MediaRecorder | null = null;
 let chunks: Blob[] = [];
@@ -77,10 +78,9 @@ async function start(streamId: string, sessionId: string): Promise<void> {
   recorder.onstop = () => {
     const video = new Blob(chunks, { type: recorder?.mimeType ?? 'video/webm' });
     chunks = [];
-    if (activeSessionId) {
-      reply({ type: 'RECORDING_DATA', sessionId: activeSessionId, video });
-    }
+    const sessionId = activeSessionId;
     teardown();
+    if (sessionId) void save(sessionId, video);
   };
 
   // A timeslice means chunks accumulate as we go, so a crash mid-recording still
@@ -102,6 +102,32 @@ function teardown(): void {
   stream = null;
   recorder = null;
   activeSessionId = null;
+}
+
+/**
+ * Persist the finished recording.
+ *
+ * The blob is written here rather than handed to the service worker, because
+ * `chrome.runtime.sendMessage` serialises with JSON: a Blob sent across it arrives as
+ * an empty object, with no error raised. This document shares the extension's origin,
+ * so it is writing to exactly the same IndexedDB the worker and review page read.
+ */
+async function save(sessionId: string, video: Blob): Promise<void> {
+  try {
+    const updated = await updateSession(sessionId, (session) => {
+      session.video = video;
+      session.status = 'stopped';
+      session.stoppedAt ??= Date.now();
+    });
+    if (!updated) throw new Error(`session ${sessionId} not found`);
+    reply({ type: 'RECORDING_SAVED', sessionId, bytes: video.size });
+  } catch (error) {
+    reply({
+      type: 'RECORDING_FAILED',
+      sessionId,
+      error: `failed to save recording: ${error instanceof Error ? error.message : String(error)}`,
+    });
+  }
 }
 
 /** Route captured tab audio back to the speakers so the tab is not silenced. */
