@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>QA Bug Reporter</title>
+    <link rel="stylesheet" href="./style.css" />
+  </head>
+  <body>
+    <main class="panel">
+      <header class="head">
+        <span class="dot" id="dot"></span>
+        <h1 id="status">Ready</h1>
+      </header>
+
+      <p class="timer" id="timer" hidden>0:00</p>
+      <p class="error" id="error" hidden></p>
+
+      <button class="primary" id="record">Record this tab</button>
+      <button class="secondary" id="sessions">Recordings</button>
+    </main>
+    <script type="module" src="./main.ts"></script>
+  </body>
+</html>

@@ -1,0 +1,11 @@
+{
+  // WXT generates .wxt/tsconfig.json on `wxt prepare`. It already sets strict,
+  // noUncheckedIndexedAccess, the `@/` path aliases, and — critically — includes
+  // .wxt/wxt.d.ts, which declares WXT's auto-imported globals (defineBackground,
+  // defineContentScript, ...). Do not override `include` here or those globals
+  // silently disappear.
+  "extends": "./.wxt/tsconfig.json",
+  "compilerOptions": {
+    "jsx": "react-jsx"
+  }
+}
