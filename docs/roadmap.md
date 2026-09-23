@@ -11,7 +11,7 @@ building clean.
 **Verify:** `npm run compile` and `npm run build` both succeed; the extension loads
 unpacked and the popup opens.
 
-## Phase 1 — Recording · **built, pending device check**
+## Phase 1 — Recording · **done**
 
 Tab capture through an offscreen `MediaRecorder`, video into IndexedDB, REC badge,
 recordings list with playback.
@@ -24,7 +24,7 @@ recordings list with playback.
 3. Confirm the tab's own audio is still audible while recording.
 4. Confirm `chrome://` pages are refused with a clear message.
 
-## Phase 2 — Event capture and deterministic report · not started
+## Phase 2 — Event capture and deterministic report · **in progress**
 
 Content scripts capture interactions, console output and failed requests; the worker
 adds navigations and keyframes. Rendered to Markdown with no model involved.

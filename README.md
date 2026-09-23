@@ -37,8 +37,8 @@ Under construction. See [`docs/roadmap.md`](docs/roadmap.md) for what works toda
 | Phase | Scope | State |
 |---|---|---|
 | 0 | Project scaffold, manifest | Built |
-| 1 | Tab recording, playback | Built, pending device check |
-| 2 | Event capture, deterministic Markdown report | Not started |
+| 1 | Tab recording, playback | Done |
+| 2 | Event capture, deterministic Markdown report | In progress |
 | 3 | Claude report generation | Not started |
 | 4 | Review page, Jira export | Not started |
 | 5 | Redaction and hardening | Not started |
