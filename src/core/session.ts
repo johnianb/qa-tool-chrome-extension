@@ -132,6 +132,14 @@ export interface RecordingState {
   sessionId: string;
   tabId: number;
   startedAt: number;
+  /**
+   * The tabCapture stream id the offscreen document redeems.
+   *
+   * It lives here, in state the document can read at any time, rather than in a
+   * separate key it consumes once. A one-shot handoff has exactly one failure mode —
+   * the reader misses it and there is nothing left to diagnose.
+   */
+  streamId: string;
 }
 
 export function newSessionId(): string {

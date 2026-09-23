@@ -131,6 +131,31 @@ Two rules follow:
 
 `src/core/messages.test.ts` pins the behaviour.
 
+## Instrument every branch, including the boring one
+
+A diagnostic that only fires on the interesting path is worse than none, because it
+makes two different failures produce identical evidence.
+
+The offscreen document originally returned silently when it found no work to claim.
+When recordings came back empty, the trace showed zero `offscreen:` lines — which was
+equally consistent with *the script never ran* and *the script ran and found nothing*.
+Those need opposite fixes, and the trace could not tell them apart.
+
+Every branch now reports itself, including "loaded and found nothing". When you add a
+diagnostic, cover the path where nothing happens.
+
+## Never report success you have not observed
+
+`startRecording` waits for the recorder's own `RECORDING_STARTED` confirmation before
+showing the REC badge, and fails loudly after four seconds if it never arrives. The
+listener is attached *before* the offscreen document is created, so a fast confirmation
+cannot arrive before anyone is watching.
+
+Without that, the popup showed REC while nothing was recording, and a tester would
+reproduce a bug into a recorder that had never started. In a QA tool this is the worst
+possible failure: it costs the one thing that cannot be recovered, which is the
+reproduction.
+
 ## The offscreen document creation race
 
 `chrome.offscreen.createDocument()` resolves when the **document** exists — not when its
@@ -138,10 +163,14 @@ script has executed. Send it a message on the next line and you are racing its m
 load. Lose that race and the message is dropped: no listener, no error, and the
 recording silently never starts.
 
-So start parameters are handed over through `chrome.storage.session`
-(`setPendingCapture` / `takePendingCapture` in `src/core/recording-state.ts`). The
-worker writes them *before* calling `createDocument`, and the document claims them on
-load. There is no ordering to get wrong.
+So the capture parameters live in the recording state in `chrome.storage.session`
+(`src/core/recording-state.ts`), written *before* `createDocument` is called. The
+document reads that state on load. There is no ordering to get wrong.
+
+The stream id sits in `RecordingState` rather than in a separate key the document
+consumes once. A one-shot handoff has exactly one failure mode — the reader misses it,
+and then there is nothing left to inspect. State that can be re-read is state you can
+debug.
 
 Messages to the offscreen document are only safe once it has demonstrably loaded —
 `OFFSCREEN_STOP` qualifies, because it can only follow a recording that is already
@@ -172,9 +201,9 @@ reached is the answer to *where did it stop?*:
 
 | Last line | Meaning |
 |---|---|
-| `worker: stream id acquired` | `tabCapture` worked; the offscreen document never loaded |
-| `worker: pending capture written` | Document was not created — check `createDocument` |
-| `offscreen: claimed capture` | `getUserMedia` hung or was rejected |
+| `worker: stream id acquired` | `tabCapture` worked; the document never loaded |
+| `worker: offscreen document created` | Document exists but its script never ran |
+| `offscreen: document loaded and claimed recording state` | `getUserMedia` hung or was rejected |
 | `offscreen: stream acquired` | Stream fine; `MediaRecorder` construction failed |
 | `offscreen: recorder started` | Recorder ran but produced no chunks — the track ended early |
 | `offscreen: first chunk received` | Data flowed; the stop path or the IndexedDB write failed |

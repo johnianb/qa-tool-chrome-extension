@@ -7,7 +7,7 @@
  * finished blob is handed back to the worker on stop.
  */
 import type { OffscreenMessage, OffscreenReply } from '@/core/messages';
-import { takePendingCapture } from '@/core/recording-state';
+import { getRecordingState } from '@/core/recording-state';
 import { updateSession } from '@/core/storage/db';
 
 let recorder: MediaRecorder | null = null;
@@ -39,7 +39,7 @@ function trace(sessionId: string, line: string): void {
 
 chrome.runtime.onMessage.addListener((message: OffscreenMessage) => {
   if (message.type === 'OFFSCREEN_PICKUP') {
-    void pickUpPendingCapture();
+    void pickUpRecording('nudge');
   } else if (message.type === 'OFFSCREEN_STOP') {
     stop();
   }
@@ -49,21 +49,43 @@ chrome.runtime.onMessage.addListener((message: OffscreenMessage) => {
 });
 
 /**
- * Claim the capture the worker left in storage and begin recording.
+ * Claim the active recording and start capturing.
  *
- * Runs on load, which is the path that matters: the worker writes the parameters
- * before calling `createDocument`, so they are always waiting by the time this script
- * executes. No message needs to arrive for a recording to start.
+ * Runs on load, which is the path that matters: the worker writes the recording state
+ * before calling `createDocument`, so it is always waiting by the time this script
+ * executes. No message needs to arrive for a recording to begin.
+ *
+ * Every branch reports itself. An earlier version returned silently when there was
+ * nothing to claim, which made "the script never ran" and "the script ran and found
+ * nothing" indistinguishable in the trace — the two failures needing opposite fixes.
  */
-async function pickUpPendingCapture(): Promise<void> {
-  const pending = await takePendingCapture();
-  if (!pending) return;
-  await start(pending.streamId, pending.sessionId);
+async function pickUpRecording(reason: 'load' | 'nudge'): Promise<void> {
+  console.info(`[qa-bug-reporter] offscreen document ${reason}`);
+
+  let state: Awaited<ReturnType<typeof getRecordingState>> = null;
+  try {
+    state = await getRecordingState();
+  } catch (error) {
+    console.error('[qa-bug-reporter] could not read recording state', error);
+    return;
+  }
+
+  if (!state) {
+    console.warn(`[qa-bug-reporter] ${reason}: no active recording state to claim`);
+    return;
+  }
+
+  trace(state.sessionId, `document ${reason}ed and claimed recording state`);
+
+  if (activeSessionId === state.sessionId) {
+    trace(state.sessionId, 'already recording this session, ignoring');
+    return;
+  }
+
+  await start(state.streamId, state.sessionId);
 }
 
-console.info('[qa-bug-reporter] offscreen document loaded');
-
-void pickUpPendingCapture();
+void pickUpRecording('load');
 
 async function start(streamId: string, sessionId: string): Promise<void> {
   activeSessionId = sessionId;

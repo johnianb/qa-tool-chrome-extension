@@ -9,7 +9,6 @@ import type { OffscreenReply, PopupMessage, PopupState } from '@/core/messages';
 import {
   clearRecordingState,
   getRecordingState,
-  setPendingCapture,
   setRecordingState,
 } from '@/core/recording-state';
 import { appendTrace, listSessions, putSession, updateSession } from '@/core/storage/db';
@@ -79,14 +78,15 @@ async function startRecording(): Promise<{ sessionId: string }> {
   const startedAt = Date.now();
 
   await putSession(blankSession(sessionId, startedAt, await environment(tab)));
-  await setRecordingState({ sessionId, tabId: tab.id, startedAt });
+  await setRecordingState({ sessionId, tabId: tab.id, startedAt, streamId });
   await appendTrace(sessionId, 'worker', `stream id acquired for tab ${tab.id}`);
 
   // Hand the parameters over through storage *before* the document exists, so there is
   // no window in which a message could be sent to a listener that has not registered
   // yet. See the note on `setPendingCapture`.
-  await setPendingCapture({ sessionId, streamId });
-  await appendTrace(sessionId, 'worker', 'pending capture written to storage.session');
+  // Watch for the recorder's confirmation before the document exists, so a fast start
+  // cannot be missed.
+  const started = waitForStart(sessionId);
 
   const created = await ensureOffscreenDocument();
   await appendTrace(
@@ -95,11 +95,22 @@ async function startRecording(): Promise<{ sessionId: string }> {
     created ? 'offscreen document created' : 'offscreen document already open, nudging',
   );
   if (!created) {
-    // The document was already open from a previous recording, so it has long since
-    // loaded and will not re-read storage on its own. Nudge it.
+    // Already open from a previous recording, so it will not re-read state on its own.
     await chrome.runtime.sendMessage({ type: 'OFFSCREEN_PICKUP' }).catch(() => {
-      // A dropped nudge is not fatal; the document polls storage on load.
+      // A dropped nudge is not fatal; the document re-reads state on load.
     });
+  }
+
+  // Do not report success until the recorder actually confirms. Without this the popup
+  // shows REC and the tester records a bug into a recorder that never started — which
+  // is precisely the failure that wasted a day here.
+  if (!(await started)) {
+    await onRecordingFailed(
+      sessionId,
+      'The offscreen recorder never confirmed it started. Open chrome://extensions, ' +
+        'check the service worker console, and confirm tab capture is permitted by policy.',
+    );
+    throw new Error('Recorder failed to start.');
   }
 
   console.info(`[qa-bug-reporter] recording ${sessionId} on tab ${tab.id}`);
@@ -135,6 +146,29 @@ async function stopRecording(): Promise<{ sessionId: string | null }> {
 async function onRecordingSaved(sessionId: string, bytes: number): Promise<void> {
   console.info(`[qa-bug-reporter] saved ${sessionId} (${(bytes / 1_048_576).toFixed(1)} MB)`);
   await closeOffscreenDocument();
+}
+
+/**
+ * Resolve when the recorder confirms it started, or false if it never does.
+ *
+ * The listener is attached before the offscreen document is created so a fast
+ * confirmation cannot arrive before anyone is watching for it.
+ */
+function waitForStart(sessionId: string, timeoutMs = 4000): Promise<boolean> {
+  return new Promise((resolve) => {
+    const done = (ok: boolean) => {
+      chrome.runtime.onMessage.removeListener(listener);
+      clearTimeout(timer);
+      resolve(ok);
+    };
+    const listener = (message: OffscreenReply) => {
+      if (message.sessionId !== sessionId) return;
+      if (message.type === 'RECORDING_STARTED') done(true);
+      else if (message.type === 'RECORDING_FAILED') done(false);
+    };
+    const timer = setTimeout(() => done(false), timeoutMs);
+    chrome.runtime.onMessage.addListener(listener);
+  });
 }
 
 /** Diagnostics forwarded from the offscreen document, which has no durable console. */
