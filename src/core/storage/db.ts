@@ -67,6 +67,30 @@ export async function deleteSession(id: string): Promise<void> {
   await (await db()).delete(STORE, id);
 }
 
+/**
+ * Append a lifecycle breadcrumb to a session.
+ *
+ * Safe to call from any extension context — they all share this database. Failures are
+ * swallowed: a diagnostic that can break the thing it is diagnosing is worse than no
+ * diagnostic.
+ */
+export async function appendTrace(
+  sessionId: string,
+  context: 'worker' | 'offscreen',
+  line: string,
+): Promise<void> {
+  try {
+    await updateSession(sessionId, (session) => {
+      const at = Date.now() - session.startedAt;
+      const stamp = `T+${Math.floor(at / 1000)}.${String(at % 1000).padStart(3, '0')}s`;
+      session.trace ??= [];
+      session.trace.push(`${stamp}  ${context}: ${line}`);
+    });
+  } catch {
+    // ignore
+  }
+}
+
 /** Bytes currently used, so the UI can warn before the quota bites. */
 export async function estimateUsage(): Promise<{ usage: number; quota: number }> {
   const est = await navigator.storage?.estimate?.();

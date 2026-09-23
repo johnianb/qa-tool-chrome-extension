@@ -111,6 +111,16 @@ export interface Session {
    * recording explains itself instead of just appearing empty.
    */
   error?: string;
+  /**
+   * Lifecycle breadcrumbs, `T+mm:ss.mmm  context: what happened`.
+   *
+   * The recording pipeline spans four contexts that each log to a different console,
+   * and the offscreen document's console only exists while it is open — so by the time
+   * a tester notices an empty recording, the evidence is gone. The trace persists with
+   * the session instead, which means a failure can be diagnosed from the review page
+   * without reproducing it.
+   */
+  trace: string[];
 }
 
 /**

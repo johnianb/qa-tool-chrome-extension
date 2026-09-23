@@ -120,6 +120,8 @@ function Detail({ session, onDelete }: { session: Session; onDelete: () => void 
         <NoVideo session={session} />
       )}
 
+      <Diagnostics session={session} />
+
       <dl className="mt-5 grid grid-cols-2 gap-x-6 gap-y-3 text-sm sm:grid-cols-4">
         <Stat label="Duration" value={duration(session)} />
         <Stat label="Interactions" value={String(session.events.length)} />
@@ -160,9 +162,8 @@ function NoVideo({ session }: { session: Session }) {
     <Placeholder>
       <p className="font-medium">No video was saved</p>
       <p className="mt-1">
-        The recorder never produced data. Check the offscreen document&apos;s console:
-        <code className="mx-1 rounded bg-neutral-100 px-1">chrome://extensions</code>→
-        Inspect views → offscreen.html, visible only while a recording is running.
+        The recorder never produced data. The diagnostics below show how far the
+        recording got — the last line is where it stopped.
       </p>
     </Placeholder>
   );
@@ -185,6 +186,31 @@ function Placeholder({
     >
       {children}
     </div>
+  );
+}
+
+/**
+ * The recording lifecycle, as it actually happened.
+ *
+ * Open by default when there is no video, because that is exactly when someone needs
+ * it; collapsed otherwise so a healthy recording stays uncluttered. The last line
+ * reached is the answer to "where did it stop?".
+ */
+function Diagnostics({ session }: { session: Session }) {
+  const trace = session.trace ?? [];
+  const failed = !(session.video instanceof Blob) && session.status !== 'recording';
+  if (trace.length === 0) return null;
+
+  return (
+    <details open={failed} className="mt-5 rounded-xl border border-neutral-200">
+      <summary className="cursor-pointer px-4 py-2 text-sm font-medium">
+        Diagnostics
+        <span className="ml-2 font-normal text-neutral-500">{trace.length} steps</span>
+      </summary>
+      <pre className="overflow-x-auto border-t border-neutral-200 px-4 py-3 text-xs leading-relaxed text-neutral-700">
+        {trace.join('\n')}
+      </pre>
+    </details>
   );
 }
 

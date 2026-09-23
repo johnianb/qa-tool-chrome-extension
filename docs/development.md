@@ -158,3 +158,27 @@ When a recording fails, the reason is written to `session.error` and the review 
 renders it in place of the video player. An empty recording that explains itself is the
 difference between a minute of debugging and an afternoon — the tester is holding the
 only reproduction, and they should not have to open a console to learn what happened.
+
+## Diagnosing a recording that produced nothing
+
+The pipeline spans four contexts with four separate consoles, and the offscreen
+document's console **only exists while the document is open** — it closes the moment a
+recording finishes. So by the time a tester notices an empty recording, the console
+evidence is already gone.
+
+Every lifecycle step therefore writes a breadcrumb to `session.trace` in IndexedDB, and
+the review page renders it (open by default when there is no video). The last line
+reached is the answer to *where did it stop?*:
+
+| Last line | Meaning |
+|---|---|
+| `worker: stream id acquired` | `tabCapture` worked; the offscreen document never loaded |
+| `worker: pending capture written` | Document was not created — check `createDocument` |
+| `offscreen: claimed capture` | `getUserMedia` hung or was rejected |
+| `offscreen: stream acquired` | Stream fine; `MediaRecorder` construction failed |
+| `offscreen: recorder started` | Recorder ran but produced no chunks — the track ended early |
+| `offscreen: first chunk received` | Data flowed; the stop path or the IndexedDB write failed |
+| `offscreen: saved N bytes` | It worked |
+
+Add a breadcrumb whenever you add a step. They are cheap, they persist, and they are the
+only durable record of a failure the tester cannot reproduce on demand.

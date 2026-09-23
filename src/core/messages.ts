@@ -35,7 +35,8 @@ export type OffscreenMessage =
 export type OffscreenReply =
   | { type: 'RECORDING_STARTED'; sessionId: string }
   | { type: 'RECORDING_FAILED'; sessionId: string; error: string }
-  | { type: 'RECORDING_SAVED'; sessionId: string; bytes: number };
+  | { type: 'RECORDING_SAVED'; sessionId: string; bytes: number }
+  | { type: 'OFFSCREEN_TRACE'; sessionId: string; line: string };
 
 /** content script → worker */
 export type ContentMessage =

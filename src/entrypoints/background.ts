@@ -12,7 +12,7 @@ import {
   setPendingCapture,
   setRecordingState,
 } from '@/core/recording-state';
-import { listSessions, putSession, updateSession } from '@/core/storage/db';
+import { appendTrace, listSessions, putSession, updateSession } from '@/core/storage/db';
 import { newSessionId, type EnvironmentInfo, type Session } from '@/core/session';
 
 const OFFSCREEN_PATH = 'offscreen.html';
@@ -38,6 +38,10 @@ export default defineBackground(() => {
 
       case 'RECORDING_SAVED':
         void onRecordingSaved(message.sessionId, message.bytes);
+        return false;
+
+      case 'OFFSCREEN_TRACE':
+        void onOffscreenTrace(message.sessionId, message.line);
         return false;
 
       case 'RECORDING_FAILED':
@@ -76,13 +80,20 @@ async function startRecording(): Promise<{ sessionId: string }> {
 
   await putSession(blankSession(sessionId, startedAt, await environment(tab)));
   await setRecordingState({ sessionId, tabId: tab.id, startedAt });
+  await appendTrace(sessionId, 'worker', `stream id acquired for tab ${tab.id}`);
 
   // Hand the parameters over through storage *before* the document exists, so there is
   // no window in which a message could be sent to a listener that has not registered
   // yet. See the note on `setPendingCapture`.
   await setPendingCapture({ sessionId, streamId });
+  await appendTrace(sessionId, 'worker', 'pending capture written to storage.session');
 
   const created = await ensureOffscreenDocument();
+  await appendTrace(
+    sessionId,
+    'worker',
+    created ? 'offscreen document created' : 'offscreen document already open, nudging',
+  );
   if (!created) {
     // The document was already open from a previous recording, so it has long since
     // loaded and will not re-read storage on its own. Nudge it.
@@ -104,10 +115,17 @@ async function stopRecording(): Promise<{ sessionId: string | null }> {
     session.status = 'stopped';
     session.stoppedAt = Date.now();
   });
+  await appendTrace(state.sessionId, 'worker', 'stop requested');
 
   // The offscreen document writes the video to IndexedDB itself and replies
   // RECORDING_SAVED; the blob cannot travel through sendMessage (JSON serialisation).
-  await chrome.runtime.sendMessage({ type: 'OFFSCREEN_STOP' });
+  // A rejection here must not strand the recording state, or the next Record attempt
+  // is refused as "already in progress".
+  try {
+    await chrome.runtime.sendMessage({ type: 'OFFSCREEN_STOP' });
+  } catch (error) {
+    await appendTrace(state.sessionId, 'worker', `stop message failed: ${errorText(error)}`);
+  }
   await clearRecordingState();
   await setBadge('', '#000000');
 
@@ -117,6 +135,12 @@ async function stopRecording(): Promise<{ sessionId: string | null }> {
 async function onRecordingSaved(sessionId: string, bytes: number): Promise<void> {
   console.info(`[qa-bug-reporter] saved ${sessionId} (${(bytes / 1_048_576).toFixed(1)} MB)`);
   await closeOffscreenDocument();
+}
+
+/** Diagnostics forwarded from the offscreen document, which has no durable console. */
+async function onOffscreenTrace(sessionId: string, line: string): Promise<void> {
+  console.info(`[qa-bug-reporter] offscreen: ${line}`);
+  await appendTrace(sessionId, 'offscreen', line);
 }
 
 async function onRecordingFailed(sessionId: string, error: string): Promise<void> {
@@ -153,6 +177,7 @@ function blankSession(id: string, startedAt: number, env: EnvironmentInfo): Sess
     console: [],
     network: [],
     keyframes: [],
+    trace: [],
   };
 }
 

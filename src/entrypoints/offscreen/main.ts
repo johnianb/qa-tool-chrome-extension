@@ -20,7 +20,21 @@ const VIDEO_BITS_PER_SECOND = 2_500_000;
 const MAX_HEIGHT = 720;
 
 function reply(message: OffscreenReply): void {
-  void chrome.runtime.sendMessage(message);
+  // A rejected send must never break recording: the worker may simply be asleep.
+  chrome.runtime.sendMessage(message).catch(() => {});
+}
+
+/**
+ * Record a breadcrumb against the session.
+ *
+ * This document's DevTools console only exists while it is open, and it closes as soon
+ * as a recording finishes — so anything logged only to the console is gone before a
+ * tester can look at it. Breadcrumbs go to the session record instead, where the review
+ * page can show them.
+ */
+function trace(sessionId: string, line: string): void {
+  console.info(`[qa-bug-reporter] ${line}`);
+  reply({ type: 'OFFSCREEN_TRACE', sessionId, line });
 }
 
 chrome.runtime.onMessage.addListener((message: OffscreenMessage) => {
@@ -47,11 +61,14 @@ async function pickUpPendingCapture(): Promise<void> {
   await start(pending.streamId, pending.sessionId);
 }
 
+console.info('[qa-bug-reporter] offscreen document loaded');
+
 void pickUpPendingCapture();
 
 async function start(streamId: string, sessionId: string): Promise<void> {
   activeSessionId = sessionId;
   chunks = [];
+  trace(sessionId, `claimed capture, redeeming stream id`);
 
   try {
     // The `mandatory` constraint shape is Chrome-specific and is how a tabCapture
@@ -72,7 +89,22 @@ async function start(streamId: string, sessionId: string): Promise<void> {
     reply({
       type: 'RECORDING_FAILED',
       sessionId,
-      error: error instanceof Error ? error.message : String(error),
+      error: `getUserMedia failed: ${error instanceof Error ? error.message : String(error)}`,
+    });
+    return;
+  }
+
+  const tracks = stream.getTracks();
+  trace(
+    sessionId,
+    `stream acquired: ${tracks.length} track(s) — ` +
+      tracks.map((t) => `${t.kind}:${t.readyState}`).join(', '),
+  );
+  if (stream.getVideoTracks().length === 0) {
+    reply({
+      type: 'RECORDING_FAILED',
+      sessionId,
+      error: 'The capture stream contained no video track.',
     });
     return;
   }
@@ -87,14 +119,31 @@ async function start(streamId: string, sessionId: string): Promise<void> {
     videoBitsPerSecond: VIDEO_BITS_PER_SECOND,
   });
 
+  recorder.onerror = (event) => {
+    const detail = (event as unknown as { error?: Error }).error;
+    reply({
+      type: 'RECORDING_FAILED',
+      sessionId,
+      error: `MediaRecorder error: ${detail?.message ?? 'unknown'}`,
+    });
+  };
+
   recorder.ondataavailable = (event) => {
-    if (event.data.size > 0) chunks.push(event.data);
+    if (event.data.size > 0) {
+      chunks.push(event.data);
+      // Only trace the first chunk; one line proves data is flowing, more is noise.
+      if (chunks.length === 1) trace(sessionId, `first chunk received (${event.data.size} bytes)`);
+    }
   };
 
   recorder.onstop = () => {
     const video = new Blob(chunks, { type: recorder?.mimeType ?? 'video/webm' });
+    const chunkCount = chunks.length;
     chunks = [];
     const sessionId = activeSessionId;
+    if (sessionId) {
+      trace(sessionId, `recorder stopped: ${chunkCount} chunk(s), ${video.size} bytes`);
+    }
     teardown();
     if (sessionId) void save(sessionId, video);
   };
@@ -102,10 +151,14 @@ async function start(streamId: string, sessionId: string): Promise<void> {
   // A timeslice means chunks accumulate as we go, so a crash mid-recording still
   // leaves recoverable data rather than nothing.
   recorder.start(1000);
+  trace(sessionId, `recorder started, mimeType=${recorder.mimeType}`);
   reply({ type: 'RECORDING_STARTED', sessionId });
 }
 
 function stop(): void {
+  if (activeSessionId) {
+    trace(activeSessionId, `stop received, recorder state=${recorder?.state ?? 'none'}`);
+  }
   if (recorder && recorder.state !== 'inactive') {
     recorder.stop(); // onstop delivers the blob
   } else {
@@ -136,6 +189,7 @@ async function save(sessionId: string, video: Blob): Promise<void> {
       session.stoppedAt ??= Date.now();
     });
     if (!updated) throw new Error(`session ${sessionId} not found`);
+    trace(sessionId, `saved ${video.size} bytes to IndexedDB`);
     reply({ type: 'RECORDING_SAVED', sessionId, bytes: video.size });
   } catch (error) {
     reply({
