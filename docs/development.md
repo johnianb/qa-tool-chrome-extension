@@ -130,3 +130,31 @@ Two rules follow:
   than taking the page down with it.
 
 `src/core/messages.test.ts` pins the behaviour.
+
+## The offscreen document creation race
+
+`chrome.offscreen.createDocument()` resolves when the **document** exists — not when its
+script has executed. Send it a message on the next line and you are racing its module
+load. Lose that race and the message is dropped: no listener, no error, and the
+recording silently never starts.
+
+So start parameters are handed over through `chrome.storage.session`
+(`setPendingCapture` / `takePendingCapture` in `src/core/recording-state.ts`). The
+worker writes them *before* calling `createDocument`, and the document claims them on
+load. There is no ordering to get wrong.
+
+Messages to the offscreen document are only safe once it has demonstrably loaded —
+`OFFSCREEN_STOP` qualifies, because it can only follow a recording that is already
+running. `OFFSCREEN_PICKUP` exists solely for the case where the document was left open
+from a previous recording and so will not re-read storage on its own; a dropped pickup
+is non-fatal.
+
+The general rule: **treat the offscreen document as a worker that pulls jobs, not one
+that gets pushed them.**
+
+## Failures should land on the session
+
+When a recording fails, the reason is written to `session.error` and the review page
+renders it in place of the video player. An empty recording that explains itself is the
+difference between a minute of debugging and an afternoon — the tester is holding the
+only reproduction, and they should not have to open a console to learn what happened.

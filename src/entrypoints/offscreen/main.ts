@@ -7,6 +7,7 @@
  * finished blob is handed back to the worker on stop.
  */
 import type { OffscreenMessage, OffscreenReply } from '@/core/messages';
+import { takePendingCapture } from '@/core/recording-state';
 import { updateSession } from '@/core/storage/db';
 
 let recorder: MediaRecorder | null = null;
@@ -23,8 +24,8 @@ function reply(message: OffscreenReply): void {
 }
 
 chrome.runtime.onMessage.addListener((message: OffscreenMessage) => {
-  if (message.type === 'OFFSCREEN_START') {
-    void start(message.streamId, message.sessionId);
+  if (message.type === 'OFFSCREEN_PICKUP') {
+    void pickUpPendingCapture();
   } else if (message.type === 'OFFSCREEN_STOP') {
     stop();
   }
@@ -32,6 +33,21 @@ chrome.runtime.onMessage.addListener((message: OffscreenMessage) => {
   // restarted between start and stop without breaking a held sendResponse callback.
   return false;
 });
+
+/**
+ * Claim the capture the worker left in storage and begin recording.
+ *
+ * Runs on load, which is the path that matters: the worker writes the parameters
+ * before calling `createDocument`, so they are always waiting by the time this script
+ * executes. No message needs to arrive for a recording to start.
+ */
+async function pickUpPendingCapture(): Promise<void> {
+  const pending = await takePendingCapture();
+  if (!pending) return;
+  await start(pending.streamId, pending.sessionId);
+}
+
+void pickUpPendingCapture();
 
 async function start(streamId: string, sessionId: string): Promise<void> {
   activeSessionId = sessionId;

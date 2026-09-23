@@ -106,6 +106,11 @@ export interface Session {
   report?: BugReport;
   /** Jira issue key, once exported. */
   jiraKey?: string;
+  /**
+   * Why this session failed, when it did. Surfaced in the review page so a failed
+   * recording explains itself instead of just appearing empty.
+   */
+  error?: string;
 }
 
 /**

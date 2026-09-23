@@ -117,11 +117,7 @@ function Detail({ session, onDelete }: { session: Session; onDelete: () => void 
           className="w-full rounded-xl border border-neutral-200 bg-black"
         />
       ) : (
-        <div className="rounded-xl border border-dashed border-neutral-300 p-8 text-center text-sm text-neutral-500">
-          {session.status === 'recording'
-            ? 'Still recording…'
-            : 'No video was saved for this recording.'}
-        </div>
+        <NoVideo session={session} />
       )}
 
       <dl className="mt-5 grid grid-cols-2 gap-x-6 gap-y-3 text-sm sm:grid-cols-4">
@@ -131,6 +127,64 @@ function Detail({ session, onDelete }: { session: Session; onDelete: () => void 
         <Stat label="Failed requests" value={String(session.network.length)} />
       </dl>
     </main>
+  );
+}
+
+/**
+ * Shown in place of the player when there is no video.
+ *
+ * A recording that produced nothing is the failure a tester is most likely to hit, so
+ * this says what went wrong and where to look rather than leaving a blank box.
+ */
+function NoVideo({ session }: { session: Session }) {
+  if (session.status === 'recording') {
+    return (
+      <Placeholder>
+        <p>Still recording…</p>
+      </Placeholder>
+    );
+  }
+
+  if (session.error) {
+    return (
+      <Placeholder tone="error">
+        <p className="font-medium text-red-700">This recording failed</p>
+        <pre className="mt-2 overflow-x-auto whitespace-pre-wrap text-left text-xs text-red-700">
+          {session.error}
+        </pre>
+      </Placeholder>
+    );
+  }
+
+  return (
+    <Placeholder>
+      <p className="font-medium">No video was saved</p>
+      <p className="mt-1">
+        The recorder never produced data. Check the offscreen document&apos;s console:
+        <code className="mx-1 rounded bg-neutral-100 px-1">chrome://extensions</code>→
+        Inspect views → offscreen.html, visible only while a recording is running.
+      </p>
+    </Placeholder>
+  );
+}
+
+function Placeholder({
+  children,
+  tone = 'neutral',
+}: {
+  children: React.ReactNode;
+  tone?: 'neutral' | 'error';
+}) {
+  return (
+    <div
+      className={`rounded-xl border border-dashed p-8 text-center text-sm ${
+        tone === 'error'
+          ? 'border-red-300 bg-red-50 text-red-700'
+          : 'border-neutral-300 text-neutral-500'
+      }`}
+    >
+      {children}
+    </div>
   );
 }
 

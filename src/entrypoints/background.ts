@@ -9,6 +9,7 @@ import type { OffscreenReply, PopupMessage, PopupState } from '@/core/messages';
 import {
   clearRecordingState,
   getRecordingState,
+  setPendingCapture,
   setRecordingState,
 } from '@/core/recording-state';
 import { listSessions, putSession, updateSession } from '@/core/storage/db';
@@ -76,9 +77,21 @@ async function startRecording(): Promise<{ sessionId: string }> {
   await putSession(blankSession(sessionId, startedAt, await environment(tab)));
   await setRecordingState({ sessionId, tabId: tab.id, startedAt });
 
-  await ensureOffscreenDocument();
-  await chrome.runtime.sendMessage({ type: 'OFFSCREEN_START', streamId, sessionId });
+  // Hand the parameters over through storage *before* the document exists, so there is
+  // no window in which a message could be sent to a listener that has not registered
+  // yet. See the note on `setPendingCapture`.
+  await setPendingCapture({ sessionId, streamId });
 
+  const created = await ensureOffscreenDocument();
+  if (!created) {
+    // The document was already open from a previous recording, so it has long since
+    // loaded and will not re-read storage on its own. Nudge it.
+    await chrome.runtime.sendMessage({ type: 'OFFSCREEN_PICKUP' }).catch(() => {
+      // A dropped nudge is not fatal; the document polls storage on load.
+    });
+  }
+
+  console.info(`[qa-bug-reporter] recording ${sessionId} on tab ${tab.id}`);
   await setBadge('REC', '#d92d20');
   return { sessionId };
 }
@@ -108,6 +121,13 @@ async function onRecordingSaved(sessionId: string, bytes: number): Promise<void>
 
 async function onRecordingFailed(sessionId: string, error: string): Promise<void> {
   console.error(`[qa-bug-reporter] recording failed for ${sessionId}: ${error}`);
+  // Record the reason on the session itself, so the review page can explain the empty
+  // recording rather than leaving the tester to guess.
+  await updateSession(sessionId, (session) => {
+    session.error = error;
+    session.status = 'stopped';
+    session.stoppedAt ??= Date.now();
+  });
   await clearRecordingState();
   await setBadge('ERR', '#d92d20');
   await closeOffscreenDocument();
@@ -154,14 +174,19 @@ async function activeTab(): Promise<chrome.tabs.Tab> {
   return tab;
 }
 
-/** `createDocument` throws if one already exists, so check first. */
-async function ensureOffscreenDocument(): Promise<void> {
-  if (await chrome.offscreen.hasDocument()) return;
+/**
+ * Create the offscreen document if it is not already open.
+ *
+ * @returns true if this call created it, false if one was already open.
+ */
+async function ensureOffscreenDocument(): Promise<boolean> {
+  if (await chrome.offscreen.hasDocument()) return false;
   await chrome.offscreen.createDocument({
     url: OFFSCREEN_PATH,
     reasons: [chrome.offscreen.Reason.USER_MEDIA],
     justification: 'Recording the active tab with MediaRecorder, which the service worker cannot host.',
   });
+  return true;
 }
 
 async function closeOffscreenDocument(): Promise<void> {

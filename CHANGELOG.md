@@ -3,6 +3,13 @@
 ## Unreleased
 
 ### Fixed
+- Recordings produced no video because `chrome.offscreen.createDocument()` resolves
+  before the document's script runs, so the `OFFSCREEN_START` message was dropped with
+  no listener registered and no error raised. Start parameters are now handed over
+  through `chrome.storage.session` and claimed by the document on load, removing the
+  race entirely.
+- A failed recording now records why on the session and the review page shows it,
+  instead of presenting an empty result with no explanation.
 - Recordings saved no video and the review page rendered blank. The video blob was sent
   from the offscreen document to the service worker via `chrome.runtime.sendMessage`,
   which serialises as JSON and reduces a Blob to `{}` without raising — the review page

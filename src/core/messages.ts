@@ -11,9 +11,16 @@ export type PopupMessage =
   | { type: 'STOP_RECORDING' }
   | { type: 'GET_STATE' };
 
-/** worker → offscreen document */
+/**
+ * worker → offscreen document
+ *
+ * Start parameters do not travel by message — see `setPendingCapture` in
+ * `recording-state.ts` for why. `OFFSCREEN_PICKUP` only tells an already-loaded
+ * document to re-read storage; by the time `OFFSCREEN_STOP` is sent the document has
+ * certainly loaded, so that one is safe to send directly.
+ */
 export type OffscreenMessage =
-  | { type: 'OFFSCREEN_START'; streamId: string; sessionId: string }
+  | { type: 'OFFSCREEN_PICKUP' }
   | { type: 'OFFSCREEN_STOP' };
 
 /**
