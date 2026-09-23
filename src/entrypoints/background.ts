@@ -5,14 +5,28 @@
  * idle while the offscreen document keeps recording, so live state goes to
  * `chrome.storage.session` and captured data goes straight to IndexedDB.
  */
-import type { OffscreenReply, PopupMessage, PopupState } from '@/core/messages';
+import type {
+  CaptureMessage,
+  CaptureStatus,
+  ContentMessage,
+  OffscreenReply,
+  PopupMessage,
+  PopupState,
+} from '@/core/messages';
+import { captureKeyframe, MIN_CAPTURE_INTERVAL_MS } from '@/core/keyframes';
+import { scrubUrl } from '@/core/events/redact';
 import {
   clearRecordingState,
   getRecordingState,
   setRecordingState,
 } from '@/core/recording-state';
 import { appendTrace, listSessions, putSession, updateSession } from '@/core/storage/db';
-import { newSessionId, type EnvironmentInfo, type Session } from '@/core/session';
+import {
+  newSessionId,
+  type EnvironmentInfo,
+  type InteractionEvent,
+  type Session,
+} from '@/core/session';
 
 const OFFSCREEN_PATH = 'offscreen.html';
 
@@ -24,7 +38,11 @@ interface ProbeInfo {
 }
 
 export default defineBackground(() => {
-  chrome.runtime.onMessage.addListener((message: PopupMessage | OffscreenReply, _sender, sendResponse) => {
+  chrome.runtime.onMessage.addListener((
+    message: PopupMessage | OffscreenReply | ContentMessage,
+    _sender,
+    sendResponse,
+  ) => {
     switch (message.type) {
       case 'START_RECORDING':
         void startRecording().then(sendResponse, (error: unknown) =>
@@ -45,6 +63,26 @@ export default defineBackground(() => {
       case 'RECORDING_SAVED':
         void onRecordingSaved(message.sessionId, message.bytes);
         return false;
+
+      case 'EVENTS':
+        void onEvents(message.sessionId, message.events, _sender);
+        return false;
+
+      case 'CONSOLE':
+        void updateSession(message.sessionId, (session) => {
+          session.console.push(...message.entries);
+        });
+        return false;
+
+      case 'NETWORK':
+        void updateSession(message.sessionId, (session) => {
+          session.network.push(...message.entries);
+        });
+        return false;
+
+      case 'AM_I_RECORDED':
+        void captureStatus(_sender).then(sendResponse);
+        return true;
 
       case 'OFFSCREEN_PROBE':
         console.info('[qa-bug-reporter] offscreen probe reported in', message.info);
@@ -70,6 +108,50 @@ export default defineBackground(() => {
       if (state?.tabId === tabId) void stopRecording();
     });
   });
+
+  // Navigations within the recorded tab. The content script reports its own load, but
+  // only this sees a navigation that replaces the page before a script can run.
+  chrome.webNavigation.onCommitted.addListener(async ({ tabId, url, frameId, transitionType }) => {
+    if (frameId !== 0) return; // top frame only; subframe loads are noise
+    const state = await getRecordingState();
+    if (!state || state.tabId !== tabId) return;
+    await updateSession(state.sessionId, (session) => {
+      session.events.push({
+        t: Math.max(0, Date.now() - session.startedAt),
+        type: 'navigate',
+        label: `navigated to ${scrubUrl(url)} (${transitionType})`,
+      });
+    });
+  });
+
+  /**
+   * Requests that failed in ways the page's own code cannot see — subresource 404s,
+   * CORS rejections, blocked requests. The MAIN-world probe covers fetch and XHR; this
+   * covers everything else.
+   */
+  chrome.webRequest.onCompleted.addListener(
+    (details) => {
+      if (details.statusCode < 400) return;
+      void recordNetworkFailure(details.tabId, {
+        method: details.method,
+        url: scrubUrl(details.url),
+        status: details.statusCode,
+      });
+    },
+    { urls: ['<all_urls>'] },
+  );
+
+  chrome.webRequest.onErrorOccurred.addListener(
+    (details) => {
+      void recordNetworkFailure(details.tabId, {
+        method: details.method,
+        url: scrubUrl(details.url),
+        status: null,
+        error: details.error,
+      });
+    },
+    { urls: ['<all_urls>'] },
+  );
 });
 
 async function startRecording(): Promise<{ sessionId: string }> {
@@ -124,6 +206,9 @@ async function startRecording(): Promise<{ sessionId: string }> {
     throw new Error('Recorder failed to start.');
   }
 
+  // Content scripts are already loaded and idle; tell them a recording has begun.
+  await tellTab(tab.id, { type: 'CAPTURE_START', sessionId, startedAt });
+
   console.info(`[qa-bug-reporter] recording ${sessionId} on tab ${tab.id}`);
   await setBadge('REC', '#d92d20');
   return { sessionId };
@@ -138,6 +223,9 @@ async function stopRecording(): Promise<{ sessionId: string | null }> {
     session.stoppedAt = Date.now();
   });
   await appendTrace(state.sessionId, 'worker', 'stop requested');
+
+  // Ask the content scripts to flush whatever they have buffered before we finish.
+  await tellTab(state.tabId, { type: 'CAPTURE_STOP' });
 
   // The offscreen document writes the video to IndexedDB itself and replies
   // RECORDING_SAVED; the blob cannot travel through sendMessage (JSON serialisation).
@@ -179,6 +267,92 @@ function waitForStart(sessionId: string, timeoutMs = 4000): Promise<boolean> {
     const timer = setTimeout(() => done(false), timeoutMs);
     chrome.runtime.onMessage.addListener(listener);
   });
+}
+
+/**
+ * Store a batch of interactions, and take a screenshot if one is due.
+ *
+ * Keyframes are tied to clicks and submissions rather than a timer: the interesting
+ * moments in a bug are the ones where the tester did something.
+ */
+async function onEvents(
+  sessionId: string,
+  events: InteractionEvent[],
+  sender: chrome.runtime.MessageSender,
+): Promise<void> {
+  await updateSession(sessionId, (session) => {
+    session.events.push(...events);
+  });
+
+  const worthShooting = events.find((e) => e.type === 'click' || e.type === 'submit');
+  if (worthShooting && sender.tab?.windowId !== undefined) {
+    await maybeCapture(sessionId, sender.tab.windowId, worthShooting);
+  }
+}
+
+/** Timestamp of the last screenshot, to respect Chrome's capture rate limit. */
+let lastCaptureAt = 0;
+
+async function maybeCapture(
+  sessionId: string,
+  windowId: number,
+  trigger: InteractionEvent,
+): Promise<void> {
+  if (Date.now() - lastCaptureAt < MIN_CAPTURE_INTERVAL_MS) return;
+  lastCaptureAt = Date.now();
+
+  const blob = await captureKeyframe(windowId);
+  if (!blob) return;
+
+  await updateSession(sessionId, (session) => {
+    session.keyframes.push({ t: trigger.t, blob, caption: `${trigger.type} ${trigger.label}` });
+  });
+}
+
+/**
+ * Record a network failure observed by the browser rather than by the page.
+ *
+ * Deduplicated against what the MAIN-world probe already reported: a failed `fetch`
+ * is seen by both, and the same 500 listed twice makes a report look unreliable.
+ */
+async function recordNetworkFailure(
+  tabId: number,
+  entry: { method: string; url: string; status: number | null; error?: string },
+): Promise<void> {
+  const state = await getRecordingState();
+  if (!state || state.tabId !== tabId) return;
+
+  await updateSession(state.sessionId, (session) => {
+    const t = Math.max(0, Date.now() - session.startedAt);
+    const duplicate = session.network.some(
+      (existing) =>
+        existing.url === entry.url &&
+        existing.status === entry.status &&
+        Math.abs(existing.t - t) < 2000,
+    );
+    if (!duplicate) session.network.push({ ...entry, t });
+  });
+}
+
+/**
+ * Send a message to every frame of a tab, ignoring frames with no listener.
+ *
+ * A tab showing a page the content script could not be injected into is normal, not an
+ * error, so a rejection here is swallowed deliberately.
+ */
+async function tellTab(tabId: number, message: CaptureMessage): Promise<void> {
+  try {
+    await chrome.tabs.sendMessage(tabId, message);
+  } catch {
+    // No receiver in that tab; nothing to do.
+  }
+}
+
+/** Tell a content script whether its tab is being recorded, and from when. */
+async function captureStatus(sender: chrome.runtime.MessageSender): Promise<CaptureStatus> {
+  const state = await getRecordingState();
+  if (!state || sender.tab?.id !== state.tabId) return { recording: false };
+  return { recording: true, sessionId: state.sessionId, startedAt: state.startedAt };
 }
 
 /** Diagnostics forwarded from the offscreen document, which has no durable console. */

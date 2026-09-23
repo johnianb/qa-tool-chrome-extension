@@ -25,6 +25,25 @@
 - The review page no longer blanks on a malformed record: it guards `instanceof Blob`
   and is wrapped in an error boundary that shows the failure.
 
+### Phase 2 — Event capture and deterministic report
+- Isolated-world content script capturing clicks, field changes, submissions,
+  Enter/Escape/Tab, scrolling and navigation. Attaches nothing until a recording starts.
+- MAIN-world probe patching `console`, `onerror`, `unhandledrejection`, `fetch` and
+  `XMLHttpRequest`, reporting only failures. Chosen over `chrome.debugger`, which shows
+  a debugging infobar and conflicts with DevTools being open.
+- `chrome.webRequest` in the worker covers browser-level failures the page cannot see,
+  deduplicated against what the probe already reported.
+- Screenshot keyframes on clicks and submissions, downscaled in the worker via
+  `OffscreenCanvas`, rate-limited under Chrome's capture quota.
+- `labeller.ts` names elements the way a screen reader would; `selector.ts` builds
+  refactor-resistant selectors; `redact.ts` describes a value's shape rather than its
+  content and never records a sensitive field.
+- Deterministic Markdown report, no model involved: condensed steps, environment,
+  console errors and failed requests. Expected result is left for a human — the tool
+  has no spec and must not invent one.
+- Review page gained a step timeline where clicking a step seeks the video, and a
+  "Copy report" button.
+
 ### Phase 1 — Recording
 - Tab capture via `chrome.tabCapture` + an offscreen `MediaRecorder` (VP9, 720p,
   2.5 Mbps), with captured audio routed back to the speakers so recording does not

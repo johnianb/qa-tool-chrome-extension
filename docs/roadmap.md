@@ -24,7 +24,7 @@ recordings list with playback.
 3. Confirm the tab's own audio is still audible while recording.
 4. Confirm `chrome://` pages are refused with a clear message.
 
-## Phase 2 — Event capture and deterministic report · **in progress**
+## Phase 2 — Event capture and deterministic report · **built, pending device check**
 
 Content scripts capture interactions, console output and failed requests; the worker
 adds navigations and keyframes. Rendered to Markdown with no model involved.

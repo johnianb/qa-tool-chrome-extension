@@ -5,9 +5,10 @@
  * editable report fields and Jira export land here in later phases — the layout
  * already reserves the two-column shape they need.
  */
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { deleteSession, listSessions } from '@/core/storage/db';
 import { formatOffset, type Session } from '@/core/session';
+import { toMarkdown, toSteps } from '@/services/markdown';
 
 export function App() {
   const [sessions, setSessions] = useState<Session[] | null>(null);
@@ -91,6 +92,24 @@ export function App() {
 
 function Detail({ session, onDelete }: { session: Session; onDelete: () => void }) {
   const videoUrl = useObjectUrl(session.video);
+  const video = useRef<HTMLVideoElement>(null);
+  const steps = useMemo(() => toSteps(session.events), [session.events]);
+
+  /**
+   * Seek the player to the moment a step happened.
+   *
+   * Every captured event carries `t` relative to the recording start, so this costs
+   * nothing to implement — and it is what lets a reviewer check a written step against
+   * what actually happened instead of taking the report on trust.
+   */
+  const seekTo = useCallback((atMs: number) => {
+    const el = video.current;
+    if (!el) return;
+    el.currentTime = atMs / 1000;
+    void el.play().catch(() => {
+      // Autoplay may be refused; the seek still happened, which is the point.
+    });
+  }, []);
 
   return (
     <main className="min-w-0 flex-1">
@@ -101,24 +120,33 @@ function Detail({ session, onDelete }: { session: Session; onDelete: () => void 
           </h2>
           <p className="truncate text-sm text-neutral-500">{session.env.url}</p>
         </div>
-        <button
-          type="button"
-          onClick={onDelete}
-          className="shrink-0 rounded-lg border border-neutral-200 px-3 py-1.5 text-sm hover:border-red-400 hover:text-red-600"
-        >
-          Delete
-        </button>
+        <div className="flex shrink-0 gap-2">
+          <CopyMarkdownButton session={session} />
+          <button
+            type="button"
+            onClick={onDelete}
+            className="rounded-lg border border-neutral-200 px-3 py-1.5 text-sm hover:border-red-400 hover:text-red-600"
+          >
+            Delete
+          </button>
+        </div>
       </header>
 
-      {videoUrl ? (
-        <video
-          src={videoUrl}
-          controls
-          className="w-full rounded-xl border border-neutral-200 bg-black"
-        />
-      ) : (
-        <NoVideo session={session} />
-      )}
+      <div className="flex flex-col gap-5 lg:flex-row">
+        <div className="min-w-0 flex-1">
+          {videoUrl ? (
+            <video
+              ref={video}
+              src={videoUrl}
+              controls
+              className="w-full rounded-xl border border-neutral-200 bg-black"
+            />
+          ) : (
+            <NoVideo session={session} />
+          )}
+        </div>
+        <Steps steps={steps} onSeek={seekTo} seekable={videoUrl !== null} />
+      </div>
 
       <Diagnostics session={session} />
 
@@ -129,6 +157,75 @@ function Detail({ session, onDelete }: { session: Session; onDelete: () => void 
         <Stat label="Failed requests" value={String(session.network.length)} />
       </dl>
     </main>
+  );
+}
+
+/** The reproduction steps, each one a seek into the video. */
+function Steps({
+  steps,
+  onSeek,
+  seekable,
+}: {
+  steps: ReturnType<typeof toSteps>;
+  onSeek: (atMs: number) => void;
+  seekable: boolean;
+}) {
+  return (
+    <section className="w-full lg:w-80">
+      <h3 className="mb-2 text-sm font-semibold">
+        Steps to reproduce
+        <span className="ml-2 font-normal text-neutral-500">{steps.length}</span>
+      </h3>
+
+      {steps.length === 0 ? (
+        <p className="rounded-lg border border-dashed border-neutral-300 p-4 text-sm text-neutral-500">
+          No interactions were captured. If the recording predates event capture, record
+          a new one.
+        </p>
+      ) : (
+        <ol className="max-h-[28rem] overflow-y-auto pr-1">
+          {steps.map((step) => (
+            <li key={step.n}>
+              <button
+                type="button"
+                onClick={() => onSeek(step.atMs)}
+                disabled={!seekable}
+                className="flex w-full gap-2 rounded-lg px-2 py-1.5 text-left text-sm hover:bg-neutral-100 disabled:cursor-default disabled:hover:bg-transparent"
+              >
+                <span className="w-4 shrink-0 text-right text-neutral-400 tabular-nums">
+                  {step.n}
+                </span>
+                <span className="min-w-0 flex-1">{step.text}</span>
+                <span className="shrink-0 text-neutral-400 tabular-nums">
+                  {formatOffset(step.atMs)}
+                </span>
+              </button>
+            </li>
+          ))}
+        </ol>
+      )}
+    </section>
+  );
+}
+
+/** Copies the rendered Markdown report to the clipboard. */
+function CopyMarkdownButton({ session }: { session: Session }) {
+  const [copied, setCopied] = useState(false);
+
+  const copy = useCallback(async () => {
+    await navigator.clipboard.writeText(toMarkdown(session));
+    setCopied(true);
+    setTimeout(() => setCopied(false), 1600);
+  }, [session]);
+
+  return (
+    <button
+      type="button"
+      onClick={() => void copy()}
+      className="rounded-lg border border-neutral-900 bg-neutral-900 px-3 py-1.5 text-sm text-white hover:bg-neutral-700"
+    >
+      {copied ? 'Copied' : 'Copy report'}
+    </button>
   );
 }
 

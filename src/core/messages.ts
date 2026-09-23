@@ -36,12 +36,37 @@ export type OffscreenReply =
   | { type: 'OFFSCREEN_TRACE'; sessionId: string; line: string }
   | { type: 'OFFSCREEN_PROBE'; info: { at: number; url: string; errors: string[] } };
 
+/** worker → content script */
+export type CaptureMessage =
+  | { type: 'CAPTURE_START'; sessionId: string; startedAt: number }
+  | { type: 'CAPTURE_STOP' };
+
 /** content script → worker */
 export type ContentMessage =
-  | { type: 'EVENTS'; events: InteractionEvent[] }
-  | { type: 'CONSOLE'; entries: ConsoleEntry[] }
-  | { type: 'NETWORK'; entries: NetworkEntry[] }
-  | { type: 'IS_RECORDING' };
+  | { type: 'EVENTS'; sessionId: string; events: InteractionEvent[] }
+  | { type: 'CONSOLE'; sessionId: string; entries: ConsoleEntry[] }
+  | { type: 'NETWORK'; sessionId: string; entries: NetworkEntry[] }
+  /** Asked on load, because a page can navigate mid-recording. */
+  | { type: 'AM_I_RECORDED' };
+
+/** Reply to `AM_I_RECORDED`. */
+export interface CaptureStatus {
+  recording: boolean;
+  sessionId?: string;
+  startedAt?: number;
+}
+
+/**
+ * MAIN-world probe → isolated content script, over `window.postMessage`.
+ *
+ * The probe cannot reach `chrome.*`, so the isolated script relays for it. The marker
+ * distinguishes our messages from whatever else the page posts to itself.
+ */
+export const PROBE_MARKER = '__qaBugReporterProbe';
+
+export type ProbeMessage =
+  | { marker: typeof PROBE_MARKER; kind: 'console'; entry: Omit<ConsoleEntry, 't'> }
+  | { marker: typeof PROBE_MARKER; kind: 'network'; entry: Omit<NetworkEntry, 't'> };
 
 export type ExtensionMessage = PopupMessage | OffscreenMessage | OffscreenReply | ContentMessage;
 
