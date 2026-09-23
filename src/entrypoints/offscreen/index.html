@@ -5,6 +5,9 @@
     <title>QA Bug Reporter — recorder</title>
   </head>
   <body>
+    <!-- Classic script, no imports: proves the document executes scripts even if the
+         module below fails to load. See public/offscreen-probe.js. -->
+    <script src="/offscreen-probe.js"></script>
     <script type="module" src="./main.ts"></script>
   </body>
 </html>

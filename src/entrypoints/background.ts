@@ -105,10 +105,17 @@ async function startRecording(): Promise<{ sessionId: string }> {
   // shows REC and the tester records a bug into a recorder that never started — which
   // is precisely the failure that wasted a day here.
   if (!(await started)) {
+    // Ask Chrome directly whether the document exists. Combined with the absence of any
+    // `offscreen:` trace line this separates "the document was never created" from "the
+    // document exists but its script did not run" — different bugs, same symptom.
+    await appendTrace(sessionId, 'worker', `offscreen contexts: ${await describeOffscreen()}`);
+    await appendTrace(sessionId, 'worker', `load probe: ${await describeProbe()}`);
     await onRecordingFailed(
       sessionId,
-      'The offscreen recorder never confirmed it started. Open chrome://extensions, ' +
-        'check the service worker console, and confirm tab capture is permitted by policy.',
+      'The offscreen recorder never confirmed it started within 4s. The offscreen ' +
+        'document has been left open — inspect it now via chrome://extensions → ' +
+        'Inspect views → offscreen.html.',
+      { keepOffscreen: true },
     );
     throw new Error('Recorder failed to start.');
   }
@@ -177,7 +184,37 @@ async function onOffscreenTrace(sessionId: string, line: string): Promise<void> 
   await appendTrace(sessionId, 'offscreen', line);
 }
 
-async function onRecordingFailed(sessionId: string, error: string): Promise<void> {
+/**
+ * Whether the offscreen document's classic load probe ran.
+ *
+ * Present means the document loaded and executes scripts, so the fault is in the
+ * recorder module. Absent means the document never ran anything at all.
+ */
+async function describeProbe(): Promise<string> {
+  const stored = await chrome.storage.session.get('offscreenProbe');
+  const probe = stored['offscreenProbe'] as { at: number; url: string } | undefined;
+  if (!probe) return 'never ran — the document executed no scripts';
+  return `ran ${Date.now() - probe.at}ms ago at ${probe.url}`;
+}
+
+/** What Chrome reports about the offscreen document, for the failure trace. */
+async function describeOffscreen(): Promise<string> {
+  try {
+    const contexts = await chrome.runtime.getContexts({
+      contextTypes: [chrome.runtime.ContextType.OFFSCREEN_DOCUMENT],
+    });
+    if (contexts.length === 0) return 'none — the document does not exist';
+    return contexts.map((c) => `${c.contextType} ${c.documentUrl}`).join(", ");
+  } catch (error) {
+    return `query failed: ${errorText(error)}`;
+  }
+}
+
+async function onRecordingFailed(
+  sessionId: string,
+  error: string,
+  options: { keepOffscreen?: boolean } = {},
+): Promise<void> {
   console.error(`[qa-bug-reporter] recording failed for ${sessionId}: ${error}`);
   // Record the reason on the session itself, so the review page can explain the empty
   // recording rather than leaving the tester to guess.
@@ -188,7 +225,9 @@ async function onRecordingFailed(sessionId: string, error: string): Promise<void
   });
   await clearRecordingState();
   await setBadge('ERR', '#d92d20');
-  await closeOffscreenDocument();
+  // Left open deliberately on a start failure: its console is the only place the
+  // module-load error would appear, and closing it destroys that evidence.
+  if (!options.keepOffscreen) await closeOffscreenDocument();
 }
 
 async function popupState(): Promise<PopupState> {
