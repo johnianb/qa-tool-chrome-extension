@@ -7,7 +7,6 @@
  * finished blob is handed back to the worker on stop.
  */
 import type { OffscreenMessage, OffscreenReply } from '@/core/messages';
-import { getRecordingState } from '@/core/recording-state';
 import { updateSession } from '@/core/storage/db';
 
 let recorder: MediaRecorder | null = null;
@@ -38,9 +37,7 @@ function trace(sessionId: string, line: string): void {
 }
 
 chrome.runtime.onMessage.addListener((message: OffscreenMessage) => {
-  if (message.type === 'OFFSCREEN_PICKUP') {
-    void pickUpRecording('nudge');
-  } else if (message.type === 'OFFSCREEN_STOP') {
+  if (message.type === 'OFFSCREEN_STOP') {
     stop();
   }
   // No response is sent; replies come back via sendMessage so the worker can be
@@ -49,43 +46,37 @@ chrome.runtime.onMessage.addListener((message: OffscreenMessage) => {
 });
 
 /**
- * Claim the active recording and start capturing.
+ * Read the capture parameters from this document's own URL and start recording.
  *
- * Runs on load, which is the path that matters: the worker writes the recording state
- * before calling `createDocument`, so it is always waiting by the time this script
- * executes. No message needs to arrive for a recording to begin.
- *
- * Every branch reports itself. An earlier version returned silently when there was
- * nothing to claim, which made "the script never ran" and "the script ran and found
- * nothing" indistinguishable in the trace — the two failures needing opposite fixes.
+ * The worker puts them in the query string when it creates the document, so they
+ * arrive *with* the document. No storage read, no message, nothing to be unavailable
+ * or mistimed — earlier designs used `chrome.storage.session` for this, and every
+ * silent failure we chased shared that one dependency.
  */
-async function pickUpRecording(reason: 'load' | 'nudge'): Promise<void> {
-  console.info(`[qa-bug-reporter] offscreen document ${reason}`);
+function startFromUrl(): void {
+  const params = new URLSearchParams(location.search);
+  const sessionId = params.get('session');
+  const streamId = params.get('stream');
 
-  let state: Awaited<ReturnType<typeof getRecordingState>> = null;
-  try {
-    state = await getRecordingState();
-  } catch (error) {
-    console.error('[qa-bug-reporter] could not read recording state', error);
+  console.info('[qa-bug-reporter] offscreen module loaded', { sessionId, hasStream: !!streamId });
+
+  if (!sessionId || !streamId) {
+    // Nothing to do: the document was opened without parameters. Report it rather than
+    // returning silently — an unexplained no-op is what made this hard to find.
+    chrome.runtime
+      .sendMessage({
+        type: 'OFFSCREEN_TRACE',
+        sessionId: sessionId ?? 'unknown',
+        line: `module loaded but URL had no capture parameters (${location.search || 'empty'})`,
+      })
+      .catch(() => {});
     return;
   }
 
-  if (!state) {
-    console.warn(`[qa-bug-reporter] ${reason}: no active recording state to claim`);
-    return;
-  }
-
-  trace(state.sessionId, `document ${reason}ed and claimed recording state`);
-
-  if (activeSessionId === state.sessionId) {
-    trace(state.sessionId, 'already recording this session, ignoring');
-    return;
-  }
-
-  await start(state.streamId, state.sessionId);
+  void start(streamId, sessionId);
 }
 
-void pickUpRecording('load');
+startFromUrl();
 
 async function start(streamId: string, sessionId: string): Promise<void> {
   activeSessionId = sessionId;

@@ -16,6 +16,13 @@ import { newSessionId, type EnvironmentInfo, type Session } from '@/core/session
 
 const OFFSCREEN_PATH = 'offscreen.html';
 
+/** Probe report from the offscreen document's classic load script. */
+interface ProbeInfo {
+  at: number;
+  url: string;
+  errors: string[];
+}
+
 export default defineBackground(() => {
   chrome.runtime.onMessage.addListener((message: PopupMessage | OffscreenReply, _sender, sendResponse) => {
     switch (message.type) {
@@ -37,6 +44,10 @@ export default defineBackground(() => {
 
       case 'RECORDING_SAVED':
         void onRecordingSaved(message.sessionId, message.bytes);
+        return false;
+
+      case 'OFFSCREEN_PROBE':
+        console.info('[qa-bug-reporter] offscreen probe reported in', message.info);
         return false;
 
       case 'OFFSCREEN_TRACE':
@@ -88,18 +99,11 @@ async function startRecording(): Promise<{ sessionId: string }> {
   // cannot be missed.
   const started = waitForStart(sessionId);
 
-  const created = await ensureOffscreenDocument();
-  await appendTrace(
-    sessionId,
-    'worker',
-    created ? 'offscreen document created' : 'offscreen document already open, nudging',
-  );
-  if (!created) {
-    // Already open from a previous recording, so it will not re-read state on its own.
-    await chrome.runtime.sendMessage({ type: 'OFFSCREEN_PICKUP' }).catch(() => {
-      // A dropped nudge is not fatal; the document re-reads state on load.
-    });
-  }
+  // A document carrying stale parameters in its URL is useless, so always start from a
+  // fresh one. They are cheap, and only one may exist at a time.
+  await closeOffscreenDocument();
+  await createOffscreenDocument(sessionId, streamId);
+  await appendTrace(sessionId, 'worker', 'offscreen document created with capture params');
 
   // Do not report success until the recorder actually confirms. Without this the popup
   // shows REC and the tester records a bug into a recorder that never started — which
@@ -169,9 +173,8 @@ function waitForStart(sessionId: string, timeoutMs = 4000): Promise<boolean> {
       resolve(ok);
     };
     const listener = (message: OffscreenReply) => {
-      if (message.sessionId !== sessionId) return;
-      if (message.type === 'RECORDING_STARTED') done(true);
-      else if (message.type === 'RECORDING_FAILED') done(false);
+      if (message.type === 'RECORDING_STARTED' && message.sessionId === sessionId) done(true);
+      else if (message.type === 'RECORDING_FAILED' && message.sessionId === sessionId) done(false);
     };
     const timer = setTimeout(() => done(false), timeoutMs);
     chrome.runtime.onMessage.addListener(listener);
@@ -191,10 +194,17 @@ async function onOffscreenTrace(sessionId: string, line: string): Promise<void> 
  * recorder module. Absent means the document never ran anything at all.
  */
 async function describeProbe(): Promise<string> {
-  const stored = await chrome.storage.session.get('offscreenProbe');
-  const probe = stored['offscreenProbe'] as { at: number; url: string } | undefined;
+  const local = await chrome.storage.local.get('offscreenProbe');
+  const probe = local['offscreenProbe'] as ProbeInfo | undefined;
   if (!probe) return 'never ran — the document executed no scripts';
-  return `ran ${Date.now() - probe.at}ms ago at ${probe.url}`;
+
+  const session = await chrome.storage.session.get('offscreenProbeSession');
+  const sessionOk = session['offscreenProbeSession'] !== undefined;
+  const errors = probe.errors.length > 0 ? ` errors=[${probe.errors.join('; ')}]` : '';
+  return (
+    `ran ${Date.now() - probe.at}ms ago, storage.session ` +
+    `${sessionOk ? 'available' : 'UNAVAILABLE in offscreen'}${errors}`
+  );
 }
 
 /** What Chrome reports about the offscreen document, for the failure trace. */
@@ -273,18 +283,19 @@ async function activeTab(): Promise<chrome.tabs.Tab> {
 }
 
 /**
- * Create the offscreen document if it is not already open.
+ * Create the offscreen document, passing the capture parameters in its URL.
  *
- * @returns true if this call created it, false if one was already open.
+ * The parameters ride along with the document itself rather than arriving separately by
+ * message or storage read. Both of those have to happen at the right moment against an
+ * API that has to be available; a query string just is.
  */
-async function ensureOffscreenDocument(): Promise<boolean> {
-  if (await chrome.offscreen.hasDocument()) return false;
+async function createOffscreenDocument(sessionId: string, streamId: string): Promise<void> {
+  const url = `${OFFSCREEN_PATH}?session=${encodeURIComponent(sessionId)}&stream=${encodeURIComponent(streamId)}`;
   await chrome.offscreen.createDocument({
-    url: OFFSCREEN_PATH,
+    url,
     reasons: [chrome.offscreen.Reason.USER_MEDIA],
     justification: 'Recording the active tab with MediaRecorder, which the service worker cannot host.',
   });
-  return true;
 }
 
 async function closeOffscreenDocument(): Promise<void> {

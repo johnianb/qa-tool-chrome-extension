@@ -1,16 +1,36 @@
 /**
- * Load probe for the offscreen document. Deliberately a *classic* script with no
- * imports, served verbatim from `public/`.
+ * Load probe for the offscreen document. A *classic* script with no imports, served
+ * verbatim from `public/`.
  *
- * The recorder itself is an ES module that imports two chunks. If a module fails to
- * load — a bad specifier, a CSP rule, anything — no code in it runs and no error
- * reaches any console the tester can reach. That looks identical to the document never
- * being created at all.
- *
- * This script shares none of those dependencies, so a marker here means the document
- * loaded and executed scripts; its absence means it did not. One bit, but it splits the
- * remaining suspects cleanly in half.
+ * It reports through two independent channels — `chrome.storage.local` and a runtime
+ * message — and swallows nothing. An earlier version wrote only to
+ * `chrome.storage.session` and caught its own errors, so a throw there was
+ * indistinguishable from the script never running. That ambiguity is the whole reason
+ * this file exists, so it must not reintroduce it.
  */
-chrome.storage.session
-  .set({ offscreenProbe: { at: Date.now(), url: location.href } })
-  .catch(() => {});
+(function probe() {
+  var info = { at: Date.now(), url: location.href, errors: [] };
+
+  try {
+    chrome.runtime.sendMessage({ type: 'OFFSCREEN_PROBE', info: info });
+  } catch (error) {
+    info.errors.push('sendMessage: ' + error.message);
+  }
+
+  try {
+    chrome.storage.local.set({ offscreenProbe: info });
+  } catch (error) {
+    info.errors.push('storage.local: ' + error.message);
+    console.error('[qa-bug-reporter] probe could not write storage.local', error);
+  }
+
+  // Deliberately separate: this is the API suspected of being unavailable here, and
+  // the point is to learn whether it throws — not to depend on it.
+  try {
+    chrome.storage.session.set({ offscreenProbeSession: info });
+  } catch (error) {
+    console.error('[qa-bug-reporter] storage.session is NOT available here', error);
+  }
+
+  console.info('[qa-bug-reporter] offscreen probe ran', info);
+})();
