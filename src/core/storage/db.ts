@@ -41,19 +41,36 @@ export async function getSession(id: string): Promise<Session | undefined> {
 }
 
 /**
- * Apply a change to a stored session and write it back.
+ * Apply a change to a stored session and write it back, atomically.
  *
- * Read-modify-write rather than a partial update: the callers are the service worker
- * and the review page, which never touch the same session concurrently.
+ * The get and the put share **one** `readwrite` transaction. This is not a detail:
+ * IndexedDB serialises readwrite transactions over the same store, so a single
+ * transaction makes concurrent updates queue instead of interleave. Across two separate
+ * transactions they interleave freely, and the last writer silently wins with whatever
+ * stale copy it read.
+ *
+ * That bug cost a day here. The service worker, the offscreen document and the review
+ * page all write to the same session record — the offscreen document saving a video
+ * while the worker appended a trace line was enough to erase a 694 KB recording, with
+ * the trace itself as the clobbering write. Never reintroduce a get/put pair.
+ *
+ * `mutate` must be synchronous: awaiting anything that is not an IndexedDB request
+ * inside a transaction lets it auto-close, and the put then throws.
  */
 export async function updateSession(
   id: string,
   mutate: (session: Session) => void,
 ): Promise<Session | undefined> {
-  const session = await getSession(id);
-  if (!session) return undefined;
+  const database = await db();
+  const tx = database.transaction(STORE, 'readwrite');
+  const session = await tx.store.get(id);
+  if (!session) {
+    await tx.done;
+    return undefined;
+  }
   mutate(session);
-  await putSession(session);
+  await tx.store.put(session);
+  await tx.done;
   return session;
 }
 

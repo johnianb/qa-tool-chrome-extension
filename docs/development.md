@@ -131,6 +131,24 @@ Two rules follow:
 
 `src/core/messages.test.ts` pins the behaviour.
 
+## Session writes must be atomic
+
+Three contexts write to the same session record: the service worker, the offscreen
+document, and the review page. `updateSession` therefore performs its get and its put
+inside **one** `readwrite` transaction.
+
+IndexedDB serialises readwrite transactions over the same store, so a single
+transaction makes concurrent updates queue. Split across two transactions they
+interleave freely, and the later writer puts back whatever stale copy it read.
+
+This erased a 694 KB recording. The offscreen document saved the video; the worker
+appended a trace line it had read moments earlier; the trace write landed last and took
+the video with it. The diagnostic destroyed the evidence it existed to collect, and the
+review page reported "no video was saved" about a video that had been saved perfectly.
+
+`src/core/storage/db.test.ts` reproduces it. Revert `updateSession` to a get/put pair
+and two tests fail immediately. Never reintroduce that shape.
+
 ## Instrument every branch, including the boring one
 
 A diagnostic that only fires on the interesting path is worse than none, because it

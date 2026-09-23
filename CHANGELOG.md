@@ -3,6 +3,13 @@
 ## Unreleased
 
 ### Fixed
+- Recordings were saved and then silently erased. `updateSession` performed its get and
+  put in separate IndexedDB transactions, so the offscreen document's video write and
+  the service worker's trace append interleaved, and the later writer restored a stale
+  copy — the diagnostic destroying the recording it was there to explain. Both now
+  share one `readwrite` transaction.
+- Capture parameters reach the offscreen document through its own URL rather than
+  `chrome.storage.session`, which was unavailable in that context and failing silently.
 - Recordings produced no video because `chrome.offscreen.createDocument()` resolves
   before the document's script runs, so the `OFFSCREEN_START` message was dropped with
   no listener registered and no error raised. Start parameters are now handed over
