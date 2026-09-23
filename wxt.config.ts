@@ -6,6 +6,11 @@ export default defineConfig({
   srcDir: 'src',
   modules: ['@wxt-dev/module-react'],
 
+  // Not the WXT default of `.output`. macOS Finder hides dot-directories, so the
+  // "Load unpacked" picker on chrome://extensions cannot see them without a hidden-file
+  // toggle — a papercut every person loading this extension would otherwise hit.
+  outDir: 'build',
+
   vite: () => ({
     plugins: [tailwindcss()],
   }),

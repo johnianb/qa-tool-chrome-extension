@@ -57,7 +57,7 @@ Then in Chrome:
 1. Go to `chrome://extensions`
 2. Turn on **Developer mode** (top right)
 3. Click **Load unpacked**
-4. Select the `.output/chrome-mv3` folder in this repo
+4. Select the `build/chrome-mv3` folder in this repo
 
 Pin the extension to your toolbar so the recording badge is visible.
 

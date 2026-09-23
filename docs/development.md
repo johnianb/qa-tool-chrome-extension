@@ -15,7 +15,7 @@ npm install
 | Command | Does |
 |---|---|
 | `npm run dev` | Dev build with HMR; opens a fresh Chrome profile with the extension loaded |
-| `npm run build` | Production build into `.output/chrome-mv3` |
+| `npm run build` | Production build into `build/chrome-mv3` |
 | `npm run compile` | `tsc --noEmit` — typecheck only |
 | `npm test` | Vitest, single run |
 | `npm run test:watch` | Vitest in watch mode |
@@ -26,7 +26,7 @@ to sign in to the app under test there once.
 
 ## Loading a production build manually
 
-`chrome://extensions` → Developer mode → Load unpacked → `.output/chrome-mv3`.
+`chrome://extensions` → Developer mode → Load unpacked → `build/chrome-mv3`.
 
 After a rebuild, press the reload icon on the extension card. Changing the manifest or
 the service worker sometimes needs a full **Remove** and **Load unpacked** again.
