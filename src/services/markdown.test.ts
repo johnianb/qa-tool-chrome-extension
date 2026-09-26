@@ -128,3 +128,62 @@ describe('toMarkdown', () => {
     expect(toMarkdown(session())).toContain('_Describe what should have happened._');
   });
 });
+
+describe('toMarkdown with a written report', () => {
+  const report = {
+    title: 'Order total stays at zero after a discount is applied',
+    summary: 'Applying a discount left the total unchanged.',
+    preconditions: ['Signed in as a pharmacist'],
+    stepsToReproduce: [
+      { n: 1, action: "Open the 'Orders' list", atMs: 1200 },
+      { n: 2, action: 'Apply a 10% discount', atMs: 9100 },
+    ],
+    expectedResult: 'The total should fall by 10%.',
+    actualResult: 'The total stayed at zero and the console reported a TypeError.',
+    severity: 'major' as const,
+    suspectedArea: 'POST /api/orders',
+    evidence: ['Console error at 0:09: TypeError: total is undefined'],
+    edited: false,
+  };
+
+  it('renders the written report rather than the captured fallback', () => {
+    const md = toMarkdown(session({ report }));
+    expect(md.startsWith(`# ${report.title}`)).toBe(true);
+    expect(md).toContain('**Severity:** major');
+    expect(md).toContain('**Suspected area:** POST /api/orders');
+    expect(md).toContain('1. Open the \'Orders\' list _(0:01)_');
+    expect(md).toContain('The total should fall by 10%.');
+    expect(md).toContain('Console error at 0:09: TypeError: total is undefined');
+  });
+
+  it('still reports the environment from the record, not the prose', () => {
+    const md = toMarkdown(session({ report }));
+    expect(md).toContain('- **URL:** https://app.test/orders');
+    expect(md).toContain('Chrome 141 on Macintosh');
+  });
+
+  /** A reviewer needs to know whether a human has been over it. */
+  it('says whether the report has been edited by hand', () => {
+    expect(toMarkdown(session({ report }))).toContain('and not edited');
+    expect(toMarkdown(session({ report: { ...report, edited: true } }))).toContain(
+      'then edited by hand',
+    );
+  });
+
+  /**
+   * A ticket that credits the wrong model is a small lie that a reader has no way to
+   * catch. Reports written before the extension had a second provider carry no writer
+   * and were all Claude's, which is what the absent case asserts.
+   */
+  it('credits the model that wrote the report', () => {
+    expect(toMarkdown(session({ report }))).toContain('Written by Claude');
+    expect(toMarkdown(session({ report: { ...report, writtenBy: 'Gemini' } }))).toContain(
+      'Written by Gemini',
+    );
+  });
+
+  it('ignores the tester note for the title once a report exists', () => {
+    const md = toMarkdown(session({ report, testerNote: 'Discount did nothing.' }));
+    expect(md.startsWith(`# ${report.title}`)).toBe(true);
+  });
+});

@@ -86,6 +86,19 @@ export interface BugReport {
   evidence: string[];
   /** True once a human has edited any field. Exports record whether this happened. */
   edited: boolean;
+  /**
+   * The model that wrote it, as a reader's name for it — `Claude`, `Gemini`.
+   *
+   * Exports state it, so a ticket never credits the wrong model. Optional because
+   * reports written before this extension had a second provider do not carry it, and
+   * every one of those was Claude's — which is what `writerOf` falls back to.
+   */
+  writtenBy?: string;
+}
+
+/** Who wrote a report, for exports. Pre-provider reports were all Claude's. */
+export function writerOf(report: BugReport): string {
+  return report.writtenBy?.trim() || 'Claude';
 }
 
 export interface Session {
