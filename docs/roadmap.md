@@ -43,30 +43,73 @@ actually did? Do the element names read like a human wrote them?
 
 **Already a working bug-report tool at this point.**
 
-## Phase 3 — Claude report generation · not started
+## Phase 3 — Claude report generation · **built, pending device check**
 
-Structured log + keyframes → `claude-opus-5` → schema-validated report.
+Structured log + up to six keyframes → `claude-opus-5` → schema-validated report, written
+in the review page. Settings hold the tester's own API key; a "what went wrong?" field
+finally writes `session.testerNote`, which four modules already read.
 
-**Verify:** are there steps in the report you did *not* perform? Does `expected_result`
-restate your note rather than inventing a spec? Trigger a deliberate console error and
-confirm it lands in `evidence`.
+**The spike came out differently.** The call is in the **review page, not the service
+worker**. The worker is terminated after ~30s idle and an Opus request with adaptive
+thinking can outlast that; Chrome extends the lifetime for in-flight requests, but this is
+the one call that costs money, and "usually survives" is not a foundation. An extension
+page shares the origin, so the host permission still bypasses CORS — which was the part
+that needed proving. It is provable in one click: **Settings → Test connection**.
 
-**Spike first:** calling the Anthropic API directly from an MV3 worker. Host permissions
-should bypass CORS, but confirm this on day one — before any UI is built around it.
+**Steps cannot be invented, by construction.** The model returns step *numbers* from the
+deterministic list and a rewording of each; `atMs` comes from our record. There is no
+field in which a fabricated step could be expressed. See `report-schema.ts`.
 
-## Phase 4 — Review page and Jira export · not started
+**Verify:**
+1. Record a bug, write a note, generate. Are there steps in the report you did *not*
+   perform? (`groundReport` makes this structurally impossible — this check is for
+   whether a *reworded* step changed meaning.)
+2. Generate with the note left **empty**. `expectedResult` must read "Not stated — …",
+   never a plausible invention.
+3. Trigger a deliberate console error (`throw new Error('x')` in DevTools) mid-recording
+   and confirm it lands in `evidence`.
+4. Set a bad API key and confirm the failure names the key rather than showing a stack.
 
-Video beside a step timeline, every field editable, screenshot gallery with per-image
-delete, copy-as-Markdown, and Jira issue creation with attachments.
+## Phase 4 — Review page and Jira export · **built, pending device check**
+
+Video beside a step timeline that follows the playhead, every report field editable,
+screenshot gallery with per-image delete, copy-as-Markdown, and Jira issue creation with
+attachments.
 
 Jira REST **v2**, not v3 — v3 requires Atlassian Document Format, and writing an ADF
-serialiser buys nothing here.
+serialiser buys nothing here. v2 takes a wiki-markup string and Atlassian converts it, so
+`jira-markup.ts` is a second renderer beside `markdown.ts`: handing Jira Markdown produces
+an issue whose steps are one run-on paragraph, which reads to everyone on the ticket like
+the tool got the steps wrong.
 
-**Verify:** click each step, confirm the video seeks correctly. Export to a Jira test
-project; confirm video and screenshots attach and the description renders.
+**Three decisions that came out differently from the plan:**
 
-**Watch:** Jira's default attachment limit is 10MB and a two-minute recording can exceed
-it. Show the file size before upload and offer "trim to last 30s".
+- **Attachments upload one request each**, not one multipart body. A 40 MB video that
+  Jira refuses must not take the six screenshots with it.
+- **Attachment failures are returned, not thrown.** By the time they run the issue
+  exists, and throwing would tell the tester the export failed while a real ticket sits
+  in the project.
+- **A human may edit anything, including the steps.** The rule that the *model* cannot
+  invent a step does not bind the person who performed them. Editing sets `report.edited`
+  and every export says which happened.
+
+**Verify:**
+1. Click each step, confirm the video seeks correctly, and confirm the highlighted step
+   advances on its own while the video plays.
+2. Export to a Jira test project. Confirm the video and screenshots attach, and that the
+   description *renders* — headings, numbered steps, and a `{noformat}` evidence block,
+   not a wall of literal markup.
+3. Edit a field, save, and confirm the issue description says it was edited by hand.
+4. Delete a screenshot and confirm it is gone from both the next report and the next
+   export — not merely hidden.
+5. Point it at a bad project key and confirm the failure names the project rather than
+   showing a 404.
+
+**Watch:** Jira's default attachment limit is 10 MB and a two-minute recording exceeds it.
+The size of every file is shown before upload and an over-limit video offers **trim to
+last 30s**. The trim replays the tail through a `MediaRecorder` — a WebM cannot be cut
+with `Blob.slice` — so it **runs in real time** and the trimmed copy is used for the
+attachment only; the full recording is never overwritten.
 
 ## Phase 5 — Redaction and hardening · not started
 

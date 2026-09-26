@@ -26,7 +26,6 @@ passing. Four of them matter here:
 ┌─ Service worker (MV3) ───▼───────────────────────────────────┐
 │  session lifecycle · webRequest (4xx/5xx) · webNavigation    │
 │  tabs.captureVisibleTab keyframes · IndexedDB writes         │
-│  Anthropic API call · Jira REST calls                        │
 └──────────────────────────┬───────────────────────────────────┘
                            │ chrome.offscreen
 ┌─ Offscreen document ─────▼───────────────────────────────────┐
@@ -34,9 +33,12 @@ passing. Four of them matter here:
 └──────────────────────────────────────────────────────────────┘
                            │
 ┌─ Review page (extension tab) ────────────────────────────────┐
-│  video + step timeline (click step → seek video) · edit ·    │
-│  redact screenshots · copy MD · create Jira issue            │
+│  video + step timeline (click step → seek video) · settings  │
+│  model API call · edit · copy MD · create Jira issue         │
 └──────────────────────────────────────────────────────────────┘
+
+Both outbound API calls — the model and Jira — live in the review page, not the
+worker. See *Report generation* and *Jira export* below.
 ```
 
 The message protocol between them is one discriminated union in `src/core/messages.ts`,
@@ -101,22 +103,103 @@ the player. It costs nothing at capture time and cannot be reconstructed afterwa
 
 ## Report generation
 
-The worker sends the structured log plus 8–12 keyframes to `claude-opus-5` and gets back
-a schema-validated object (`messages.parse()` with a zod schema — the response cannot
-come back malformed).
+The structured log plus up to six keyframes goes to the configured model and comes back
+as a schema-validated object. The same Zod schema drives both providers — through
+`zodOutputFormat` on `messages.parse()` for Claude, and as JSON Schema in
+`response_format` for Gemini — so the field descriptions that make up half the prompt
+cannot drift apart between them. Three modules: `report-prompt.ts` builds what is sent, `report-schema.ts`
+defines what may come back and validates it, and `ai.ts` hands the call to `claude.ts`
+or `gemini.ts` — both of which ground their answer through the same `report-schema.ts`,
+so the guarantees a reviewer relies on are not a property of the model.
 
-Three guardrails live in the system prompt, and they are the difference between a report
-that is trustworthy and one that merely sounds trustworthy:
+### The model never writes a step
 
-- **`expected_result` may only restate the tester's own note.** The model has no spec for
-  the application. Anything it invents here is fiction.
-- **Every step must trace to a logged event.** No interpolating plausible-but-unrecorded
-  actions to make a narrative flow.
-- **`suspected_area` says so when the evidence does not support a diagnosis**, rather
-  than guessing.
+The failure that would make this tool worse than useless is a report containing steps the
+tester did not perform. One invented step and a reviewer stops trusting every other line.
 
-The tester's one-line "what went wrong?" is collected at stop time. It is one text field
-and it improves output more than any amount of prompt tuning.
+So the model is not asked what happened. It receives the deterministic step list from
+`toSteps()` and returns **step numbers** plus a rewording of each. `atMs` is then filled
+in from our own record of the step it named. A fabricated step is not discouraged, it is
+*unrepresentable* — there is no field it could go in, and an index that does not exist is
+dropped in `groundReport()` before it can reach the report.
+
+Prompt instructions are the second line of defence here, never the first. The three
+guarantees all live in code:
+
+| Guarantee | Enforced by |
+|---|---|
+| Every step traces to a captured event | `groundReport()` drops unknown indices; timestamps come from our record |
+| `expectedResult` is never invented | With no tester note, the field is *replaced* with a fixed "not stated" sentence whatever the model wrote |
+| No console error or failed request goes missing | Facts the model omitted are appended to `evidence` |
+
+The tester's one-line "what went wrong?" is the highest-value field in the tool and the
+only one no amount of capture can supply. It decides the report title, and it is the only
+thing permitted to become the expected result.
+
+### Why the call is not in the service worker
+
+The worker is the wrong host for a request that can run a minute. MV3 terminates it after
+roughly 30 seconds idle; Chrome does extend that for in-flight requests, but "usually
+survives" is a poor foundation for the one call in this product that costs money.
+
+The review page has no such limit, it is already open because the tester just clicked the
+button in it, and it shares the extension's origin — so the host permission for
+`api.anthropic.com` or `generativelanguage.googleapis.com` still bypasses CORS, which
+was the part worth proving. A closed tab is a
+visible failure; a dead worker is not.
+
+This also keeps the SDK out of the worker bundle: `background.js` is 12 kB, and the
+531 kB of SDK, React and zod loads only on the page that uses it.
+
+## Jira export
+
+Two modules: `jira-markup.ts` renders the issue, `jira.ts` makes the calls.
+
+### Why v2, and why a second renderer
+
+REST **v2** takes a wiki-markup string for `description` and Atlassian converts it on the
+way in. v3 takes Atlassian Document Format — a JSON document tree — and writing an ADF
+serialiser would buy nothing.
+
+But wiki markup is not Markdown, and the differences are exactly the load-bearing ones:
+headings are `h2.`, ordered lists are `#`, and `{`, `[` and `|` are structural characters
+that swallow the rest of a line when unbalanced. Posting `toMarkdown()` output produces an
+issue whose steps are one run-on paragraph — which reads, to everyone on the ticket, as
+the tool having got the steps wrong. Hence a second renderer rather than a shared one.
+
+Log lines go inside `{noformat}`. A stack trace containing `{` would otherwise vanish into
+a malformed macro, and quoting the machine's output verbatim is the honest presentation
+besides.
+
+### Uploads are one request per file
+
+The issue is created first, then each attachment is uploaded in its own request.
+
+One multipart body would be fewer round trips and strictly worse: Jira's default limit is
+10 MB per file, a two-minute recording exceeds it, and a single rejected body would take
+the six screenshots down with the video. For the same reason attachment failures are
+*returned* rather than thrown — by the time they run the issue exists, and throwing would
+tell the tester the export failed while a real ticket sits in the project.
+
+### Trimming
+
+An over-limit recording offers a trim to its last 30 seconds. This re-encodes by replaying
+the tail through a `MediaRecorder`: a WebM cannot be cut with `Blob.slice`, because the
+tail alone begins mid-cluster with no keyframe and the result is a corrupt file rather than
+a short one. So the trim runs in **real time**, and `playbackRate` stays at 1 — speeding it
+up would change the playback speed of evidence whose timing is frequently the point.
+
+The trimmed copy is used for the upload only. The stored recording is never overwritten.
+
+### The edit flag
+
+A human may edit any field, including the steps. The rule that the *model* cannot invent a
+step constrains the model, not the person who performed them — and supplying the expected
+result the model was forbidden to guess at is precisely what review is for.
+
+What the tool owes the reader is which happened, so an edit that changes content sets
+`report.edited`, and both the Markdown and the Jira description say so. Opening the editor
+and saving without changing anything does not set it.
 
 ## Data model
 
@@ -124,6 +207,12 @@ and it improves output more than any amount of prompt tuning.
 block, the video blob, four parallel time-ordered streams (`events`, `console`,
 `network`, `keyframes`), the tester's note, and — once generated — the report and the
 Jira key.
+
+Settings are the one exception to "IndexedDB holds everything": they live in
+`chrome.storage.local` and carry two sets of credentials. `getSettings` merges the stored
+record over the defaults *two levels deep*, because a shallow merge would hand back a
+`jira` object written by an older build — and a missing field there becomes `undefined` in
+a controlled React input, which presents as a form that will not accept typing.
 
 All four streams share the relative clock, so merging them into one timeline for the
 model or the UI is a sort, not a correlation problem.

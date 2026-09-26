@@ -22,8 +22,9 @@ While you record, the extension captures more than video:
 - every failed network request
 - a screenshot at each significant moment
 
-When you stop, you type one line about what went wrong. Claude then writes the report
-from **the recorded event log**, not from watching the video. This is the whole design
+When you stop, you type one line about what went wrong. A model — Claude or Gemini,
+your choice — then writes the report from **the recorded event log**, not from watching
+the video. This is the whole design
 bet: steps derived from recorded facts are accurate, where steps inferred from pixels
 are merely plausible. You review and edit the draft, then export.
 
@@ -38,10 +39,15 @@ Under construction. See [`docs/roadmap.md`](docs/roadmap.md) for what works toda
 |---|---|---|
 | 0 | Project scaffold, manifest | Built |
 | 1 | Tab recording, playback | Done |
-| 2 | Event capture, deterministic Markdown report | In progress |
-| 3 | Claude report generation | Not started |
-| 4 | Review page, Jira export | Not started |
+| 2 | Event capture, deterministic Markdown report | Built |
+| 3 | Report generation — Claude or Gemini | Built |
+| 4 | Review page editing, Jira export | Built |
 | 5 | Redaction and hardening | Not started |
+
+Reports need an API key for one of the two providers — see
+[`docs/setup.md`](docs/setup.md). Neither a Claude Pro nor a Gemini Pro subscription
+includes API access, but Google's AI Studio issues a free-tier Gemini key, which is the
+cheapest way to start. Everything else works without a key.
 
 ## Install (unpacked)
 
@@ -66,8 +72,18 @@ Pin the extension to your toolbar so the recording badge is visible.
 1. Open the tab showing the bug.
 2. Click the extension icon, then **Record this tab**. A red `REC` badge appears.
 3. Reproduce the bug.
-4. Click **Stop and write report**.
-5. Review, edit, export.
+4. Click **Stop and write report**, then open **Recordings**.
+5. Type one line in **What went wrong?** — this becomes the expected result, and leaving
+   it empty means the report says the expected behaviour is unknown rather than guessing.
+6. Click **Write with Claude** (or **Write with Gemini**, depending on the provider
+   you configured).
+7. Read the draft against the video — clicking a step seeks to the moment it happened, and
+   the step list follows the playhead as it plays. **Edit** anything that is wrong.
+8. **Copy report** for Markdown, or **Create issue** to push it to Jira with the recording
+   and screenshots attached.
+
+Jira export needs a site URL, an Atlassian account email, an API token and a project key —
+see [`docs/setup.md`](docs/setup.md). Everything up to step 7 works without it.
 
 Browser-internal pages (`chrome://`, the Web Store, other extensions) cannot be
 recorded — Chrome does not permit it.
@@ -76,8 +92,7 @@ recorded — Chrome does not permit it.
 
 | Document | For |
 |---|---|
-| [`docs/user-guide.md`](docs/user-guide.md) | Recording and filing a bug |
-| [`docs/setup.md`](docs/setup.md) | API keys and Jira configuration |
+| [`docs/setup.md`](docs/setup.md) | API keys, providers, model, cost |
 | [`docs/privacy.md`](docs/privacy.md) | What is captured, what leaves your machine |
 | [`docs/architecture.md`](docs/architecture.md) | How it is built and why |
 | [`docs/development.md`](docs/development.md) | Working on the extension |
