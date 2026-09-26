@@ -1,5 +1,12 @@
+import { mkdirSync } from 'node:fs';
+import { resolve } from 'node:path';
 import { defineConfig } from 'wxt';
 import tailwindcss from '@tailwindcss/vite';
+
+// chrome-launcher opens a log file inside the profile directory without creating it
+// first, so `wxt dev` dies with ENOENT unless the directory is already there.
+const chromeProfile = resolve('.wxt/chrome-profile');
+mkdirSync(chromeProfile, { recursive: true });
 
 // https://wxt.dev/api/config.html
 export default defineConfig({
@@ -14,6 +21,19 @@ export default defineConfig({
   vite: () => ({
     plugins: [tailwindcss()],
   }),
+
+  // `wxt dev` opens its own Chrome with the extension already installed, so there is no
+  // Load-unpacked step while developing. Needs the optional `web-ext` dev dependency —
+  // without it WXT silently falls back to printing "load it manually".
+  webExt: {
+    // A profile of our own, kept between runs. The extension's settings (Anthropic key,
+    // Jira credentials) live in chrome.storage, and a throwaway profile would make you
+    // re-enter them on every restart. `.wxt/` is gitignored.
+    chromiumProfile: chromeProfile,
+    keepProfileChanges: true,
+    // Somewhere to record against on open, rather than an empty new tab.
+    startUrls: ['https://example.com'],
+  },
 
   manifest: {
     name: 'QA Bug Reporter',
@@ -33,7 +53,8 @@ export default defineConfig({
     ],
     host_permissions: [
       '<all_urls>', // the app under test can be any origin
-      'https://api.anthropic.com/*', // report generation
+      'https://api.anthropic.com/*', // report generation, Claude
+      'https://generativelanguage.googleapis.com/*', // report generation, Gemini
       'https://*.atlassian.net/*', // Jira issue creation + attachments
     ],
     action: {

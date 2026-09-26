@@ -86,3 +86,38 @@ button {
 .secondary { background: transparent; color: var(--fg); }
 
 button:disabled { opacity: 0.5; cursor: default; }
+
+/*
+ * The settings row.
+ *
+ * Below the two actions and separated by a rule: recording is what the popup is for,
+ * and configuration is a thing you do once. The status beside it is there so "why did
+ * no report get written?" is answerable without opening the review page.
+ */
+.foot {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  margin-top: 11px;
+  padding-top: 10px;
+  border-top: 1px solid var(--line);
+}
+
+.link {
+  width: auto;
+  padding: 0;
+  border: none;
+  background: none;
+  color: var(--fg);
+  font-weight: 500;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+.link:hover { color: var(--muted); }
+
+.config {
+  color: var(--muted);
+  font-size: 11px;
+  text-align: right;
+}

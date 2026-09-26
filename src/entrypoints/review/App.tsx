@@ -1,18 +1,28 @@
 /**
  * Review page.
  *
- * Phase 1 scope: list recorded sessions and play one back. The step timeline,
- * editable report fields and Jira export land here in later phases — the layout
- * already reserves the two-column shape they need.
+ * Lists recorded sessions, plays one back beside its step timeline, and is where the
+ * report is written, edited and pushed to Jira. Everything on this page is anchored to
+ * the same relative clock: a step, a screenshot and the video all agree on when a thing
+ * happened, which is what lets a reviewer check a written claim against the recording
+ * instead of taking it on trust.
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { deleteSession, listSessions } from '@/core/storage/db';
 import { formatOffset, type Session } from '@/core/session';
+import { getSettings, hasApiKey, type Settings } from '@/core/settings';
 import { toMarkdown, toSteps } from '@/services/markdown';
+import { JiraPanel } from './Jira';
+import { ReportPanel } from './Report';
+import { Screenshots } from './Screenshots';
+import { SettingsPanel } from './Settings';
+import { useObjectUrl } from './useObjectUrl';
 
 export function App() {
   const [sessions, setSessions] = useState<Session[] | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [settings, setSettings] = useState<Settings | null>(null);
+  const [settingsOpen, setSettingsOpen] = useState(false);
 
   const load = useCallback(async () => {
     const all = await listSessions();
@@ -22,6 +32,14 @@ export function App() {
 
   useEffect(() => {
     void load();
+    // Open settings unprompted when there is no key: report generation is the reason
+    // most people are on this page, and it cannot work until one is set. `#settings`
+    // means the popup sent them here deliberately, so it opens whatever the key says.
+    const asked = window.location.hash === '#settings';
+    void getSettings().then((loaded) => {
+      setSettings(loaded);
+      setSettingsOpen(asked || !hasApiKey(loaded));
+    });
   }, [load]);
 
   const selected = useMemo(
@@ -42,21 +60,38 @@ export function App() {
     return <Centered>Loading…</Centered>;
   }
 
+  // Settings stay reachable with nothing recorded, so a key can be set up front rather
+  // than only after the first recording exists.
   if (sessions.length === 0) {
     return (
-      <Centered>
-        <p className="font-medium">No recordings yet</p>
-        <p className="mt-1 text-sm text-neutral-500">
-          Open the extension on the tab showing the bug and press Record.
-        </p>
-      </Centered>
+      <div className="mx-auto max-w-2xl p-6">
+        <div className="mb-6 text-center text-neutral-700">
+          <p className="font-medium">No recordings yet</p>
+          <p className="mt-1 text-sm text-neutral-500">
+            Open the extension on the tab showing the bug and press Record.
+          </p>
+        </div>
+        <SettingsPanel onSaved={setSettings} />
+      </div>
     );
   }
 
   return (
-    <div className="mx-auto flex min-h-screen max-w-6xl flex-col gap-6 p-6 lg:flex-row">
+    <div className="mx-auto min-h-screen max-w-6xl p-6">
+      {settingsOpen && <SettingsPanel onSaved={setSettings} />}
+
+      <div className="flex flex-col gap-6 lg:flex-row">
       <aside className="w-full shrink-0 lg:w-72">
-        <h1 className="mb-3 text-sm font-semibold">Recordings</h1>
+        <div className="mb-3 flex items-baseline justify-between">
+          <h1 className="text-sm font-semibold">Recordings</h1>
+          <button
+            type="button"
+            onClick={() => setSettingsOpen((open) => !open)}
+            className="text-xs text-neutral-500 underline hover:text-neutral-900"
+          >
+            {settingsOpen ? 'Hide settings' : 'Settings'}
+          </button>
+        </div>
         <ul className="flex flex-col gap-1">
           {sessions.map((session) => (
             <li key={session.id}>
@@ -85,15 +120,58 @@ export function App() {
         </ul>
       </aside>
 
-      {selected && <Detail session={selected} onDelete={() => void remove(selected.id)} />}
+      {selected && (
+        <Detail
+          session={selected}
+          settings={settings}
+          onDelete={() => void remove(selected.id)}
+          onChanged={() => void load()}
+          onOpenSettings={() => {
+            setSettingsOpen(true);
+            // The panel renders above the fold; opening it from a link further down the
+            // page would otherwise appear to do nothing.
+            window.scrollTo({ top: 0, behavior: 'smooth' });
+          }}
+        />
+      )}
+      </div>
     </div>
   );
 }
 
-function Detail({ session, onDelete }: { session: Session; onDelete: () => void }) {
+function Detail({
+  session,
+  settings,
+  onDelete,
+  onChanged,
+  onOpenSettings,
+}: {
+  session: Session;
+  settings: Settings | null;
+  onDelete: () => void;
+  onChanged: () => void;
+  onOpenSettings: () => void;
+}) {
   const videoUrl = useObjectUrl(session.video);
   const video = useRef<HTMLVideoElement>(null);
   const steps = useMemo(() => toSteps(session.events), [session.events]);
+  const [playheadMs, setPlayheadMs] = useState(0);
+
+  /**
+   * The step the video is currently inside: the last one that has already happened.
+   *
+   * The timeline reads as a transcript this way — playing the recording walks the list
+   * on its own, so a reviewer watching the video can see which written step they are
+   * looking at without clicking anything.
+   */
+  const activeStep = useMemo(() => {
+    let active = 0;
+    for (const step of steps) {
+      if (step.atMs > playheadMs) break;
+      active = step.n;
+    }
+    return active;
+  }, [steps, playheadMs]);
 
   /**
    * Seek the player to the moment a step happened.
@@ -139,14 +217,31 @@ function Detail({ session, onDelete }: { session: Session; onDelete: () => void 
               ref={video}
               src={videoUrl}
               controls
+              onTimeUpdate={(e) => setPlayheadMs(e.currentTarget.currentTime * 1000)}
               className="w-full rounded-xl border border-neutral-200 bg-black"
             />
           ) : (
             <NoVideo session={session} />
           )}
         </div>
-        <Steps steps={steps} onSeek={seekTo} seekable={videoUrl !== null} />
+        <Steps
+          steps={steps}
+          onSeek={seekTo}
+          seekable={videoUrl !== null}
+          activeStep={activeStep}
+        />
       </div>
+
+      <Screenshots session={session} onSeek={seekTo} onChanged={onChanged} />
+
+      <ReportPanel session={session} settings={settings} onChanged={onChanged} />
+
+      <JiraPanel
+        session={session}
+        settings={settings}
+        onOpenSettings={onOpenSettings}
+        onChanged={onChanged}
+      />
 
       <Diagnostics session={session} />
 
@@ -165,10 +260,13 @@ function Steps({
   steps,
   onSeek,
   seekable,
+  activeStep,
 }: {
   steps: ReturnType<typeof toSteps>;
   onSeek: (atMs: number) => void;
   seekable: boolean;
+  /** Step number the playhead is currently inside; 0 before the first one. */
+  activeStep: number;
 }) {
   return (
     <section className="w-full lg:w-80">
@@ -190,7 +288,10 @@ function Steps({
                 type="button"
                 onClick={() => onSeek(step.atMs)}
                 disabled={!seekable}
-                className="flex w-full gap-2 rounded-lg px-2 py-1.5 text-left text-sm hover:bg-neutral-100 disabled:cursor-default disabled:hover:bg-transparent"
+                aria-current={step.n === activeStep}
+                className={`flex w-full gap-2 rounded-lg px-2 py-1.5 text-left text-sm hover:bg-neutral-100 disabled:cursor-default disabled:hover:bg-transparent ${
+                  step.n === activeStep ? 'bg-neutral-100 font-medium' : ''
+                }`}
               >
                 <span className="w-4 shrink-0 text-right text-neutral-400 tabular-nums">
                   {step.n}
@@ -331,27 +432,4 @@ function Centered({ children }: { children: React.ReactNode }) {
 function duration(session: Session): string {
   if (!session.stoppedAt) return '—';
   return formatOffset(session.stoppedAt - session.startedAt);
-}
-
-/**
- * Blob → object URL, revoked when the blob changes or the component unmounts.
- *
- * The `instanceof` check is load-bearing, not defensive noise. A session written by an
- * older build can hold `{}` where a Blob belongs (a Blob does not survive
- * `chrome.runtime.sendMessage`, which serialises as JSON). `URL.createObjectURL({})`
- * throws, and a throw inside an effect unmounts the React root — one bad record would
- * otherwise blank the whole page.
- */
-function useObjectUrl(blob: Blob | undefined): string | null {
-  const [url, setUrl] = useState<string | null>(null);
-  useEffect(() => {
-    if (!(blob instanceof Blob) || blob.size === 0) {
-      setUrl(null);
-      return;
-    }
-    const next = URL.createObjectURL(blob);
-    setUrl(next);
-    return () => URL.revokeObjectURL(next);
-  }, [blob]);
-  return url;
 }

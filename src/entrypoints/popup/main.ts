@@ -7,6 +7,7 @@
  */
 import type { PopupMessage, PopupState } from '@/core/messages';
 import { formatOffset } from '@/core/session';
+import { PROVIDER_NAMES, getSettings, hasApiKey, hasJira } from '@/core/settings';
 
 const el = {
   status: document.querySelector<HTMLHeadingElement>('#status')!,
@@ -15,6 +16,8 @@ const el = {
   error: document.querySelector<HTMLParagraphElement>('#error')!,
   record: document.querySelector<HTMLButtonElement>('#record')!,
   sessions: document.querySelector<HTMLButtonElement>('#sessions')!,
+  settings: document.querySelector<HTMLButtonElement>('#settings')!,
+  config: document.querySelector<HTMLSpanElement>('#config')!,
 };
 
 let state: PopupState = { recording: false, elapsedMs: 0, sessionCount: 0 };
@@ -91,9 +94,53 @@ el.record.addEventListener('click', async () => {
   }
 });
 
-el.sessions.addEventListener('click', async () => {
-  await chrome.tabs.create({ url: chrome.runtime.getURL('/review.html') });
+/**
+ * Open the review page, focusing the one that is already open rather than stacking tabs.
+ *
+ * Settings is a thing people click more than once — twice to check a key, again after
+ * pasting a token — and `tabs.create` every time leaves a row of identical tabs. The
+ * existing tab is reused and re-navigated so the hash still takes effect.
+ */
+async function openReview(hash = ''): Promise<void> {
+  const url = chrome.runtime.getURL(`/review.html${hash}`);
+  const [open] = await chrome.tabs.query({ url: chrome.runtime.getURL('/review.html') });
+
+  if (open?.id !== undefined) {
+    await chrome.tabs.update(open.id, { url, active: true });
+    await chrome.windows.update(open.windowId, { focused: true });
+  } else {
+    await chrome.tabs.create({ url });
+  }
   window.close();
-});
+}
+
+el.sessions.addEventListener('click', () => void openReview());
+
+// `#settings` tells the review page to open the panel expanded, so this lands on the
+// fields rather than on a page where Settings must be found first.
+el.settings.addEventListener('click', () => void openReview('#settings'));
+
+/**
+ * What is configured, in the place where "why was no report written?" gets asked.
+ *
+ * The model and Jira are reported separately because they fail differently: without a
+ * model key nothing is written at all, while Jira being unset costs only the export —
+ * Copy report still works. Saying "not configured" for both would overstate the second.
+ *
+ * The selected provider is named rather than "the model": a tester who has switched to
+ * Gemini and sees "Claude not set up" would go looking for a key they already have.
+ */
+async function showConfig(): Promise<void> {
+  const settings = await getSettings();
+  const model = PROVIDER_NAMES[settings.provider];
+  const configured = hasApiKey(settings);
+  const jira = hasJira(settings);
+
+  el.config.textContent = configured
+    ? `${model} ✓ · Jira ${jira ? '✓' : 'off'}`
+    : `${model} not set up`;
+  el.settings.textContent = configured ? 'Settings' : 'Set up';
+}
 
 void refresh();
+void showConfig();
