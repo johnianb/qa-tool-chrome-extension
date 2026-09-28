@@ -78,7 +78,9 @@ export function App() {
 
   return (
     <div className="mx-auto min-h-screen max-w-6xl p-6">
-      {settingsOpen && <SettingsPanel onSaved={setSettings} />}
+      {settingsOpen && (
+        <SettingsPanel onSaved={setSettings} onClose={() => setSettingsOpen(false)} />
+      )}
 
       <div className="flex flex-col gap-6 lg:flex-row">
       <aside className="w-full shrink-0 lg:w-72">

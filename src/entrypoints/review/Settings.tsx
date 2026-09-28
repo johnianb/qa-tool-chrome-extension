@@ -31,7 +31,18 @@ const KEY_HINTS: Record<Provider, string> = {
 /** The result of a "Test connection" button, shared by both panels. */
 type Check = { state: 'idle' | 'running' } | { state: 'ok' | 'failed'; message: string };
 
-export function SettingsPanel({ onSaved }: { onSaved: (settings: Settings) => void }) {
+export function SettingsPanel({
+  onSaved,
+  onClose,
+}: {
+  onSaved: (settings: Settings) => void;
+  /**
+   * Omitted where the panel is the whole page — with nothing recorded there is nothing
+   * behind it to go back to, and a Done button that closed onto an empty screen would
+   * be a dead end rather than a way out.
+   */
+  onClose?: () => void;
+}) {
   const [settings, setSettings] = useState<Settings | null>(null);
   const [check, setCheck] = useState<Check>({ state: 'idle' });
 
@@ -88,7 +99,19 @@ export function SettingsPanel({ onSaved }: { onSaved: (settings: Settings) => vo
 
   return (
     <section className="mb-5 rounded-xl border border-neutral-200 p-4">
-      <h3 className="text-sm font-semibold">Report generation</h3>
+      <div className="flex items-baseline justify-between gap-4">
+        <h3 className="text-sm font-semibold">Report generation</h3>
+        {onClose && (
+          <button
+            type="button"
+            onClick={onClose}
+            aria-label="Close settings"
+            className="shrink-0 rounded-lg border border-neutral-300 px-2.5 py-1 text-xs hover:border-neutral-500"
+          >
+            Done
+          </button>
+        )}
+      </div>
       <p className="mt-1 text-sm text-neutral-500">
         Reports are written by a model you pay for directly, through your own API key.
         Neither a Claude Pro nor a Gemini Pro subscription includes API access — but
@@ -172,6 +195,24 @@ export function SettingsPanel({ onSaved }: { onSaved: (settings: Settings) => vo
       />
 
       <JiraSection jira={settings.jira} onSaved={publish} />
+
+      {/*
+        Repeated at the foot of the panel because the form is taller than the viewport:
+        someone who has just filled in the Jira token is a long scroll away from the
+        header, and every field here saves as it is typed, so leaving is all that is
+        left to do.
+      */}
+      {onClose && (
+        <div className="mt-6 border-t border-neutral-200 pt-4">
+          <button
+            type="button"
+            onClick={onClose}
+            className="rounded-lg border border-neutral-300 px-3 py-1.5 text-sm hover:border-neutral-500"
+          >
+            Done
+          </button>
+        </div>
+      )}
     </section>
   );
 }
