@@ -67,6 +67,9 @@ Then in Chrome:
 
 Pin the extension to your toolbar so the recording badge is visible.
 
+For the development loop — `npm run dev`, which profile to run in, and a smoke test that
+exercises the whole pipeline — see [`docs/development.md`](docs/development.md#running-it-locally).
+
 ## Use
 
 1. Open the tab showing the bug.

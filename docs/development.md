@@ -21,15 +21,87 @@ npm install
 | `npm run test:watch` | Vitest in watch mode |
 | `npm run zip` | Package for distribution |
 
-`npm run dev` is the normal loop. It launches its own Chrome profile, so you will need
-to sign in to the app under test there once.
+`npm run dev` is the normal loop — see [Running it locally](#running-it-locally) below.
 
-## Loading a production build manually
+## Running it locally
 
-`chrome://extensions` → Developer mode → Load unpacked → `build/chrome-mv3`.
+Two ways in. They differ in one thing that matters more than it sounds: **which Chrome
+profile the extension runs in**, and therefore whether you are already signed in to the
+app you want to record.
 
-After a rebuild, press the reload icon on the extension card. Changing the manifest or
-the service worker sometimes needs a full **Remove** and **Load unpacked** again.
+### `npm run dev` — the normal loop
+
+```bash
+npm install
+npm run dev
+```
+
+WXT builds with HMR and launches **its own Chrome profile** with the extension already
+loaded. Nothing to click on `chrome://extensions`. Edit a file under `src/` and the
+change appears without a rebuild.
+
+The fresh profile is the catch: it has none of your cookies, so you sign in to the app
+under test once in that window. WXT reuses the same profile directory between runs, so
+that is a one-time cost, not a per-run one.
+
+HMR does not cover everything. Changes to `wxt.config.ts`, the manifest, or
+`background.ts` need the extension reloaded — WXT usually does this itself, but when a
+change appears not to have landed, reload the extension card before suspecting the code.
+
+### Load unpacked — when you need your real profile
+
+```bash
+npm install
+npm run build
+```
+
+Then `chrome://extensions` → Developer mode → **Load unpacked** → `build/chrome-mv3`.
+
+This runs in whatever profile you loaded it from, which is the point: your existing
+sessions, your work SSO, the tab you were already looking at. Use it when signing in
+again under a throwaway profile is the expensive part — or when you want to check the
+production bundle rather than the dev one.
+
+The cost is that every change needs `npm run build` and then the reload ⟳ icon on the
+extension card. Changing the manifest or the service worker sometimes needs a full
+**Remove** and **Load unpacked** again.
+
+Extension **pages** cache separately from the extension itself: after reloading the
+card, close and reopen the review page, or it keeps serving the previous bundle.
+
+### Which to use
+
+| Situation | Use |
+|---|---|
+| Working on the UI | `npm run dev` |
+| Recording an app with awkward SSO | Load unpacked into your own profile |
+| Verifying what ships | `npm run build`, load unpacked |
+| Debugging the service worker lifecycle | Either, but read the console table below |
+
+### First run
+
+Recording and the deterministic Markdown report work immediately — no key, no
+configuration. Only a model-written report needs an API key, and the extension opens
+Settings by itself when none is set. See [`setup.md`](setup.md); Gemini's free tier is
+the cheapest way to have one in a minute.
+
+Pin the extension to the toolbar. The recording badge lives on the icon, and unpinned it
+is hidden behind the puzzle-piece menu where you will not see it.
+
+### A smoke test that exercises the whole pipeline
+
+Worth running once after setup, because it crosses all four contexts and fails visibly
+if any of them is broken:
+
+1. Open any ordinary page — not a `chrome://` page, Chrome forbids recording those.
+2. Extension icon → **Record this tab**. Confirm the red `REC` badge appears; it is
+   written only after the recorder confirms it started, so the badge means recording.
+3. Click a few things, type into a field.
+4. **Stop and write report**, then open **Recordings**.
+5. You should see a playable video and a step list. Clicking a step seeks the video.
+
+No video, or an empty session, means the trace table at the end of this document is
+where to look — not the console, which by then has closed.
 
 ## Debugging — four separate consoles
 
