@@ -10,7 +10,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { deleteSession, listSessions } from '@/core/storage/db';
 import { formatOffset, type Session } from '@/core/session';
-import { getSettings, hasApiKey, type Settings } from '@/core/settings';
+import { getSettings, type Settings } from '@/core/settings';
 import { toMarkdown, toSteps } from '@/services/markdown';
 import { JiraPanel } from './Jira';
 import { ReportPanel } from './Report';
@@ -32,13 +32,15 @@ export function App() {
 
   useEffect(() => {
     void load();
-    // Open settings unprompted when there is no key: report generation is the reason
-    // most people are on this page, and it cannot work until one is set. `#settings`
-    // means the popup sent them here deliberately, so it opens whatever the key says.
-    const asked = window.location.hash === '#settings';
+    // Settings open only when asked for — `#settings` is the popup sending someone here
+    // deliberately. They used to open unprompted whenever no API key was set, on the
+    // reasoning that report generation is why people come to this page. But the page is
+    // opened far more often to *watch a recording*, and a tester who has deliberately
+    // not set a key met a credentials form every time. The Report panel says what is
+    // missing and links here, which is the prompt that belongs to that job.
     void getSettings().then((loaded) => {
       setSettings(loaded);
-      setSettingsOpen(asked || !hasApiKey(loaded));
+      setSettingsOpen(window.location.hash === '#settings');
     });
   }, [load]);
 
@@ -236,7 +238,12 @@ function Detail({
 
       <Screenshots session={session} onSeek={seekTo} onChanged={onChanged} />
 
-      <ReportPanel session={session} settings={settings} onChanged={onChanged} />
+      <ReportPanel
+        session={session}
+        settings={settings}
+        onChanged={onChanged}
+        onOpenSettings={onOpenSettings}
+      />
 
       <JiraPanel
         session={session}
