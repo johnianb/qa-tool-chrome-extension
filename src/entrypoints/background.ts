@@ -36,7 +36,19 @@ interface ProbeInfo {
   at: number;
   url: string;
   errors: string[];
+  /** Which `chrome.*` APIs that context actually had. Absent from older reports. */
+  apis?: { runtime: boolean; storage: boolean; storageSession: boolean };
 }
+
+/**
+ * Where the worker keeps the last probe report.
+ *
+ * The *worker* writes this, not the probe. An offscreen document is granted
+ * `chrome.runtime` and nothing else, so its own `chrome.storage.local.set` could never
+ * have worked — which meant nothing ever wrote this key and `describeProbe` reported
+ * "never ran" every single time, in exactly the failure it exists to explain.
+ */
+const PROBE_KEY = 'offscreenProbe';
 
 export default defineBackground(() => {
   chrome.runtime.onMessage.addListener((
@@ -86,7 +98,7 @@ export default defineBackground(() => {
         return true;
 
       case 'OFFSCREEN_PROBE':
-        console.info('[qa-bug-reporter] offscreen probe reported in', message.info);
+        void onOffscreenProbe(message.info);
         return false;
 
       case 'OFFSCREEN_TRACE':
@@ -434,23 +446,43 @@ async function onOffscreenTrace(sessionId: string, line: string): Promise<void> 
 }
 
 /**
+ * Persist the probe report, because the probe itself cannot.
+ *
+ * `chrome.runtime` is the only API an offscreen document is granted, so the message is
+ * the whole channel. Storing it here is what makes `describeProbe` able to answer at
+ * all — and it must survive the worker restarting between the probe arriving and a
+ * failure being diagnosed, which is why it goes to `storage.local` rather than a
+ * module variable.
+ */
+async function onOffscreenProbe(info: ProbeInfo): Promise<void> {
+  console.info('[qa-bug-reporter] offscreen probe reported in', info);
+  await chrome.storage.local.set({ [PROBE_KEY]: info });
+}
+
+/**
  * Whether the offscreen document's classic load probe ran.
  *
  * Present means the document loaded and executes scripts, so the fault is in the
- * recorder module. Absent means the document never ran anything at all.
+ * recorder module rather than in the document ever existing.
+ *
+ * Absent is **not** proof the document ran nothing. The report arrives by runtime
+ * message, so it is also absent when the message could not be delivered — a worker that
+ * was asleep, or a document torn down before its first script finished. The wording says
+ * what is known rather than concluding; the previous version asserted "the document
+ * executed no scripts" and, because nothing ever wrote this key, said it every time.
  */
 async function describeProbe(): Promise<string> {
-  const local = await chrome.storage.local.get('offscreenProbe');
-  const probe = local['offscreenProbe'] as ProbeInfo | undefined;
-  if (!probe) return 'never ran — the document executed no scripts';
+  const local = await chrome.storage.local.get(PROBE_KEY);
+  const probe = local[PROBE_KEY] as ProbeInfo | undefined;
+  if (!probe) {
+    return 'no report — either the document ran no scripts, or its message never arrived';
+  }
 
-  const session = await chrome.storage.session.get('offscreenProbeSession');
-  const sessionOk = session['offscreenProbeSession'] !== undefined;
+  const apis = probe.apis
+    ? ` apis=[runtime:${probe.apis.runtime} storage:${probe.apis.storage}]`
+    : '';
   const errors = probe.errors.length > 0 ? ` errors=[${probe.errors.join('; ')}]` : '';
-  return (
-    `ran ${Date.now() - probe.at}ms ago, storage.session ` +
-    `${sessionOk ? 'available' : 'UNAVAILABLE in offscreen'}${errors}`
-  );
+  return `ran ${Date.now() - probe.at}ms ago at ${probe.url}${apis}${errors}`;
 }
 
 /** What Chrome reports about the offscreen document, for the failure trace. */
