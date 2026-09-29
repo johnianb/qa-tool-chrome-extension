@@ -12,6 +12,7 @@ import { deleteSession, listSessions } from '@/core/storage/db';
 import { formatOffset, type Session } from '@/core/session';
 import { getSettings, type Settings } from '@/core/settings';
 import { toMarkdown, toSteps } from '@/services/markdown';
+import { DownloadMenu } from './Download';
 import { JiraPanel } from './Jira';
 import { ReportPanel } from './Report';
 import { Screenshots } from './Screenshots';
@@ -202,8 +203,14 @@ function Detail({
           </h2>
           <p className="truncate text-sm text-neutral-500">{session.env.url}</p>
         </div>
-        <div className="flex shrink-0 gap-2">
+        <div className="flex shrink-0 items-start gap-2">
           <CopyMarkdownButton session={session} />
+          {/*
+            Between Copy and Delete on purpose. Copy and Download are the same question
+            asked of two destinations, so they belong together — and Delete stays at the
+            far edge, away from the two buttons anyone reaches for by reflex.
+          */}
+          <DownloadMenu session={session} />
           <button
             type="button"
             onClick={onDelete}
