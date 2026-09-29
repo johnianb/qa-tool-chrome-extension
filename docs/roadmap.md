@@ -111,19 +111,62 @@ last 30s**. The trim replays the tail through a `MediaRecorder` — a WebM canno
 with `Blob.slice` — so it **runs in real time** and the trimmed copy is used for the
 attachment only; the full recording is never overwritten.
 
-## Phase 5 — Redaction and hardening · not started
+## Phase 5 — Redaction and hardening · **built, pending device check**
 
 Required scope, not polish. Recordings will contain customer data.
 
-- Never record password or `cc-*` / `current-password` / `new-password` field values.
-- Log *shape*, not content, by default: *"typed 14 characters into the 'Email' field"*.
-  Values only for explicitly allowlisted fields.
-- Heuristic scrub for emails, phone numbers, long digit runs.
-- Per-domain blocklist — domains the extension refuses to record.
-- Redaction runs **before** the IndexedDB write, so unredacted values never sit at rest.
+Most of this landed in Phase 2, deliberately: `redact.ts` had to exist before any code
+captured a typed value, because a window in which real credentials are written to disk is
+not closed by redacting afterwards. What this phase finished was the part that makes it
+a *setting* rather than a constant.
 
-**Verify:** record a form with a password and a fake email, then inspect the IndexedDB
-record directly in DevTools. The password must be absent and the email masked *at rest*.
+| | |
+|---|---|
+| Password / `cc-*` / `current-password` / `new-password` / `one-time-code` values never recorded | `isSensitiveField`, called inside `describeValue` — not overridable by the allowlist |
+| Values logged as shape — *"14 characters"* — by default | `describeValue` in `content.ts` |
+| Verbatim values for allowlisted field names only | `allowValuesFor`, opt-in and empty by default |
+| Emails, phones, card numbers and SSNs scrubbed from free text | `scrubText` on console output and the tester's note |
+| Query strings stripped from every URL | `scrubUrl` on navigations and network entries |
+| Per-domain blocklist | `isBlockedHost`, checked at record-start and on every top-frame navigation |
+| Redaction runs **before** the IndexedDB write | every call site is in the content script or the worker, upstream of `updateSession` |
+
+**The two settings are now reachable.** They were defined, tested and unused: `content.ts`
+passed the hardcoded `DEFAULT_REDACTION`, so `allowValuesFor` was an unreachable branch,
+and nothing called `isBlockedHost` at all. `Settings.redaction` now holds both, merged
+two levels deep like `jira`, edited in **Settings → Recording and redaction**.
+
+**They are frozen at record-start.** The worker reads them once, puts them in
+`RecordingState`, and sends them with `CAPTURE_START`; a frame that loads after a
+mid-recording navigation gets them back from `AM_I_RECORDED`. Reading them live would mean
+a mid-recording edit could retroactively widen what a finished recording claims about
+itself — and a value already described as "14 characters" cannot be un-described.
+
+**The blocklist cannot promise the page was never on screen.** Starting on a blocked host
+is refused before a stream id is acquired, and a recording that navigates onto one is
+stopped — but the stop fires on `onCommitted`, which is after the fact. MV3 removed
+blocking `webRequest` and there is no earlier hook, so the end of that video can show the
+blocked page. The recording is kept, not deleted, with the reason on `session.error`.
+Said in the UI and in `docs/privacy.md` too, because a redaction feature that overstates
+itself is worse than one that does not exist.
+
+**Still not done, and honestly out of scope here:** screenshot and video redaction. Those
+are pixels; the **Send screenshots with the log** toggle remains the only control.
+
+**Verify:**
+1. Record a form with a password field and a fake email typed into a text field. Inspect
+   the IndexedDB record directly in DevTools. The password must be **absent** and the
+   email **masked at rest** — not masked on the way to the model.
+2. Add a field's `name` to **Record these field values in full**, record, and confirm that
+   field's value appears verbatim while every other field is still a character count.
+3. Put a password field's name on that allowlist and confirm it is *still* not recorded.
+   `isSensitiveField` must win.
+4. Add a host to **Blocked hosts**, open it, and press Record. The refusal must name the
+   host. Confirm on `chrome://extensions` that no offscreen document was created.
+5. Start a recording on an allowed host, then navigate the tab to a blocked one. The
+   recording must stop, and the review page must explain why.
+6. Blocklist a bare domain and confirm a subdomain of it is blocked too.
+7. Type into a list field, click away, reopen Settings, and confirm what you typed is
+   still there — the commit is on blur, not per keystroke.
 
 ## Phase 6 — Stretch
 

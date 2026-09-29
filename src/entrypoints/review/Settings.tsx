@@ -13,12 +13,14 @@ import {
   getSettings,
   saveJira,
   saveProvider,
+  saveRedaction,
   saveSettings,
   type JiraSettings,
   type Provider,
   type ProviderSettings,
   type Settings,
 } from '@/core/settings';
+import { parseRedactionList, type RedactionSettings } from '@/core/events/redact';
 import { testConnection } from '@/services/ai';
 import { testJiraConnection } from '@/services/jira';
 
@@ -175,10 +177,10 @@ export function SettingsPanel({
         <span>
           <span className="font-medium">Send screenshots with the log</span>
           {/*
-            Stated plainly because it is the one thing here that cannot be undone by a
-            later redaction pass. The event log records the shape of a value — "14
-            characters" — but a screenshot is pixels, and a frame showing a patient
-            record is legible to whatever receives it.
+            Stated plainly because it is the one thing on this page that redaction cannot
+            reach. The event log records the shape of a value — "14 characters" — but a
+            screenshot is pixels, and a frame showing a patient record is legible to
+            whatever receives it.
           */}
           <span className="mt-0.5 block text-neutral-500">
             Improves the report. Up to six frames of the recording are sent as images,
@@ -193,6 +195,8 @@ export function SettingsPanel({
         disabled={!activeProvider(settings).apiKey.trim()}
         onRun={() => void run()}
       />
+
+      <RedactionSection redaction={settings.redaction} onSaved={publish} />
 
       <JiraSection jira={settings.jira} onSaved={publish} />
 
@@ -214,6 +218,113 @@ export function SettingsPanel({
         </div>
       )}
     </section>
+  );
+}
+
+/**
+ * What the recorder is allowed to capture.
+ *
+ * Above the Jira panel deliberately: this decides what is captured at all, and the two
+ * below it only decide where an already-captured recording is sent. Someone reading down
+ * the page should meet the narrower question first.
+ */
+function RedactionSection({
+  redaction,
+  onSaved,
+}: {
+  redaction: RedactionSettings;
+  onSaved: (settings: Settings) => void;
+}) {
+  const update = useCallback(
+    async (patch: Partial<RedactionSettings>) => {
+      onSaved(await saveRedaction(patch));
+    },
+    [onSaved],
+  );
+
+  return (
+    <div className="mt-6 border-t border-neutral-200 pt-4">
+      <h3 className="text-sm font-semibold">Recording and redaction</h3>
+      <p className="mt-1 text-sm text-neutral-500">
+        Typed values are recorded as their <span className="font-medium">shape</span> —
+        &ldquo;14 characters&rdquo; — and password, card and one-time-code fields are never
+        recorded at all, whatever is set here. Changes apply to the{' '}
+        <span className="font-medium">next</span> recording, not one in progress.
+      </p>
+
+      <div className="mt-4 grid gap-4 sm:grid-cols-2">
+        <ListField
+          label="Blocked hosts"
+          hint="One per line. Subdomains are covered: admin.internal also blocks eu.admin.internal."
+          placeholder={'admin.internal\nbilling.example.com'}
+          value={redaction.blockedHosts}
+          onCommit={(blockedHosts) => void update({ blockedHosts })}
+        />
+
+        <ListField
+          label="Record these field values in full"
+          hint="One per line: a field's name, or its id if it has no name. Everything else is a length only."
+          placeholder={'orderId\nsku\nquantity'}
+          value={redaction.allowValuesFor}
+          onCommit={(allowValuesFor) => void update({ allowValuesFor })}
+        />
+      </div>
+
+      <p className="mt-3 text-xs text-neutral-500">
+        Recording a blocked host is refused, and a recording whose tab navigates onto one
+        is stopped. Chrome gives an extension no way to intercept a navigation before it
+        commits, so the end of that video can still show the page — the list prevents a
+        recording, not a glimpse.
+      </p>
+    </div>
+  );
+}
+
+/**
+ * A newline-separated list, committed on blur.
+ *
+ * Parsing per keystroke and rendering the parsed list back would discard the newline the
+ * tester has just pressed and move the cursor — the same "field that will not accept
+ * typing" failure the two-level merge in `getSettings` exists to prevent. So the raw text
+ * is local state and only the parsed result is saved.
+ */
+function ListField({
+  label,
+  hint,
+  placeholder,
+  value,
+  onCommit,
+}: {
+  label: string;
+  hint: string;
+  placeholder: string;
+  value: string[];
+  onCommit: (next: string[]) => void;
+}) {
+  const saved = value.join('\n');
+  const [text, setText] = useState(saved);
+
+  // Re-seed only when the saved *content* changes — keyed on the joined string rather
+  // than the array, whose identity is new on every settings save, including saves this
+  // field did not cause.
+  useEffect(() => {
+    setText(saved);
+  }, [saved]);
+
+  return (
+    <label className="block">
+      <span className="block text-sm font-medium">{label}</span>
+      <textarea
+        value={text}
+        onChange={(e) => setText(e.target.value)}
+        onBlur={() => onCommit(parseRedactionList(text))}
+        placeholder={placeholder}
+        rows={3}
+        spellCheck={false}
+        className="w-full resize-y rounded-lg border border-neutral-300 px-3 py-1.5 font-mono text-sm"
+      />
+      <span className="mt-1 block text-xs text-neutral-500">{hint}</span>
+    </label>
   );
 }
 

@@ -14,7 +14,8 @@ import type {
   PopupState,
 } from '@/core/messages';
 import { captureKeyframe, MIN_CAPTURE_INTERVAL_MS } from '@/core/keyframes';
-import { scrubUrl } from '@/core/events/redact';
+import { isBlockedHost, scrubUrl } from '@/core/events/redact';
+import { getSettings } from '@/core/settings';
 import {
   clearRecordingState,
   getRecordingState,
@@ -115,6 +116,12 @@ export default defineBackground(() => {
     if (frameId !== 0) return; // top frame only; subframe loads are noise
     const state = await getRecordingState();
     if (!state || state.tabId !== tabId) return;
+
+    if (isBlockedHost(url, state.redaction)) {
+      await onBlockedNavigation(state.sessionId, url);
+      return;
+    }
+
     await updateSession(state.sessionId, (session) => {
       session.events.push({
         t: Math.max(0, Date.now() - session.startedAt),
@@ -164,6 +171,17 @@ async function startRecording(): Promise<{ sessionId: string }> {
     throw new Error('Browser-internal pages cannot be recorded.');
   }
 
+  // Checked before the stream id is acquired, so a blocked host never reaches a capture
+  // API at all — the refusal is the whole point of the setting, and a stream acquired
+  // and then dropped is a worse implementation of it than one never asked for.
+  const settings = await getSettings();
+  if (isBlockedHost(tab.url, settings.redaction)) {
+    throw new Error(
+      `${hostOf(tab.url)} is on the blocked-hosts list in Settings, so it cannot be ` +
+        'recorded. Remove it there if this was not intended.',
+    );
+  }
+
   // Must be called from the worker, and only redeemable by this extension.
   const streamId = await chrome.tabCapture.getMediaStreamId({ targetTabId: tab.id });
 
@@ -171,7 +189,13 @@ async function startRecording(): Promise<{ sessionId: string }> {
   const startedAt = Date.now();
 
   await putSession(blankSession(sessionId, startedAt, await environment(tab)));
-  await setRecordingState({ sessionId, tabId: tab.id, startedAt, streamId });
+  await setRecordingState({
+    sessionId,
+    tabId: tab.id,
+    startedAt,
+    streamId,
+    redaction: settings.redaction,
+  });
   await appendTrace(sessionId, 'worker', `stream id acquired for tab ${tab.id}`);
 
   // Hand the parameters over through storage *before* the document exists, so there is
@@ -207,7 +231,12 @@ async function startRecording(): Promise<{ sessionId: string }> {
   }
 
   // Content scripts are already loaded and idle; tell them a recording has begun.
-  await tellTab(tab.id, { type: 'CAPTURE_START', sessionId, startedAt });
+  await tellTab(tab.id, {
+    type: 'CAPTURE_START',
+    sessionId,
+    startedAt,
+    redaction: settings.redaction,
+  });
 
   console.info(`[qa-bug-reporter] recording ${sessionId} on tab ${tab.id}`);
   await setBadge('REC', '#d92d20');
@@ -240,6 +269,44 @@ async function stopRecording(): Promise<{ sessionId: string | null }> {
   await setBadge('', '#000000');
 
   return { sessionId: state.sessionId };
+}
+
+/**
+ * Stop a recording whose tab has navigated onto a blocked host.
+ *
+ * **This fires on `onCommitted`, which is after the navigation has already happened.**
+ * MV3 removed blocking `webRequest`, so there is no hook that runs first — the blocklist
+ * can refuse to *start* a recording on a blocked host and can stop one that arrives
+ * there, but it cannot promise the page was never captured. The final moments of the
+ * video may show it. Said plainly here and in `docs/privacy.md`, because a redaction
+ * feature that overstates itself is worse than one that does not exist.
+ *
+ * The recording is kept rather than deleted. The part before the navigation is the part
+ * the tester wanted, and silently destroying their session is a worse outcome than the
+ * one being avoided — so the reason goes on the session, where the review page already
+ * knows how to show it.
+ */
+async function onBlockedNavigation(sessionId: string, url: string): Promise<void> {
+  const host = hostOf(url);
+  console.warn(`[qa-bug-reporter] stopping ${sessionId}: navigated to blocked host ${host}`);
+  await appendTrace(sessionId, 'worker', `blocked host reached: ${host}`);
+  await stopRecording();
+  await updateSession(sessionId, (session) => {
+    session.error =
+      `Recording stopped: the tab navigated to ${host}, which is on the blocked-hosts ` +
+      'list in Settings. Everything captured before that point has been kept — but ' +
+      'because a navigation cannot be intercepted before it commits, the end of the ' +
+      'video may show that page.';
+  });
+}
+
+/** Hostname for a message to a tester, or the raw value if it will not parse. */
+function hostOf(url: string): string {
+  try {
+    return new URL(url).hostname;
+  } catch {
+    return url;
+  }
 }
 
 async function onRecordingSaved(sessionId: string, bytes: number): Promise<void> {
@@ -352,7 +419,12 @@ async function tellTab(tabId: number, message: CaptureMessage): Promise<void> {
 async function captureStatus(sender: chrome.runtime.MessageSender): Promise<CaptureStatus> {
   const state = await getRecordingState();
   if (!state || sender.tab?.id !== state.tabId) return { recording: false };
-  return { recording: true, sessionId: state.sessionId, startedAt: state.startedAt };
+  return {
+    recording: true,
+    sessionId: state.sessionId,
+    startedAt: state.startedAt,
+    redaction: state.redaction,
+  };
 }
 
 /** Diagnostics forwarded from the offscreen document, which has no durable console. */

@@ -35,7 +35,9 @@ The default is to record a value's *shape*:
 > Enter 14 characters into the 'Email' field
 
 not the fourteen characters. This is the behaviour for every field. Values are captured
-verbatim only for fields explicitly allowlisted in redaction settings.
+verbatim only for fields you list under **Settings → Recording and redaction → Record
+these field values in full**, which starts empty. A field is matched on its `name`, or on
+its `id` if it has no `name` — the same value `describeValue` looks up.
 
 Fields that are never captured at all, whatever the settings say:
 
@@ -52,6 +54,25 @@ US social security numbers.
 
 URLs are reduced to origin + path. Query strings routinely carry tokens, session ids and
 search terms; the path is what identifies a request in a bug report.
+
+## Hosts you never want recorded
+
+**Settings → Recording and redaction → Blocked hosts** takes a list of hostnames, one per
+line. A bare domain covers its subdomains: `admin.internal` also blocks
+`eu.admin.internal`.
+
+Pressing Record on a blocked host is refused before a capture stream is even acquired, and
+a recording whose tab *navigates* onto one is stopped, with the reason shown on the review
+page. The recording is kept rather than deleted — what you captured before the navigation
+is still yours.
+
+**What this cannot promise.** The stop happens after the navigation has committed, because
+Chrome gives an extension no way to intercept one before it does. So the last moments of
+that video can show the blocked page. The list prevents a recording of that host; it does
+not guarantee no frame of it was ever captured. Check the video before exporting.
+
+Everything about the blocklist is decided when you press Record. Adding a host mid-recording
+does not stop the recording in progress.
 
 ## Screenshots are the real exposure
 
@@ -118,8 +139,16 @@ judgement about the project's audience.
 
 Honest about what is not done yet:
 
-- Per-domain blocklist (refusing to record named hosts) is **Phase 5**, not built.
-- Screenshot redaction — blurring regions before sending — is not built, and is harder
-  than it sounds. The toggle is the only control today.
-- Nothing prevents a recording from being started on a page showing patient data. That is
-  a judgement the tester makes.
+- Screenshot and video redaction — blurring regions before sending — is **not built**, and
+  is harder than it sounds. The **Send screenshots with the log** toggle is the only
+  control today, and it does nothing about a Jira export, which uploads them anyway.
+- The blocklist stops a recording that reaches a blocked host, but cannot stop the
+  navigation that got there — see above.
+- The blocklist checks the **top frame only**. A blocked host loaded in an iframe of an
+  allowed page does not stop the recording, and the video captures it like anything else
+  on screen.
+- Nothing prevents a recording from being started on an *unlisted* page showing patient
+  data. That is a judgement the tester makes.
+- Request and response **bodies** are never captured, which is a privacy property and a
+  diagnostic gap at the same time. An API bug that returns the wrong data with a 200 is
+  invisible to this tool.

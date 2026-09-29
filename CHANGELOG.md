@@ -2,6 +2,56 @@
 
 ## Unreleased
 
+### Phase 5 — Redaction reaches the settings that were already written
+- **`allowValuesFor` and `blockedHosts` are now reachable.** Both were defined in
+  `RedactionSettings`, unit-tested, and *dead*: `content.ts` passed the hardcoded
+  `DEFAULT_REDACTION`, so the allowlist branch in `describeValue` could never be taken,
+  and `isBlockedHost` had no call site anywhere in the extension. The roadmap said Phase 5
+  had not started while most of it had shipped in Phase 2 — the part genuinely missing was
+  the wiring, not the rules.
+- **`Settings.redaction`** holds both lists, merged two levels deep like `jira` for the
+  same reason: a record written before the field existed must not read back `undefined`,
+  which would throw on `blockedHosts.some` in the worker and refuse every recording.
+  Edited under **Settings → Recording and redaction**.
+- **The settings are frozen at record-start**, not read live. The worker reads them once in
+  `startRecording`, keeps them in `RecordingState`, and sends them with `CAPTURE_START`; a
+  frame that loads after a mid-recording navigation gets them back from `AM_I_RECORDED`,
+  which is the only copy that survives the worker's routine death. Reading them live would
+  let a mid-recording edit retroactively widen what a finished recording claims about
+  itself — and a value already described as "14 characters" cannot be un-described.
+  Travelling with the message also avoids a `chrome.storage` read *per frame*, which is
+  what `allFrames: true` would otherwise mean.
+- The content script's own default stays `DEFAULT_REDACTION` and is restored on stop, so a
+  script capturing without having been told what is permitted captures the **least**, not
+  the most.
+- `getRecordingState` now spreads over `DEFAULT_REDACTION`, for the reason `getSettings`
+  does. `chrome.storage.session` outlives a worker death, so a recording started by a build
+  without the field can be read by one that has it — and the first thing the worker does
+  with the value is `blockedHosts.some` in the `webNavigation` listener. A TypeError there
+  is inside an event handler: it presents as a recording that quietly stops logging
+  navigations, not as an error anyone sees. `recording-state.test.ts` pins it.
+- **Blocked hosts are refused before a stream id is acquired**, and a recording whose tab
+  navigates onto one is stopped with the reason written to `session.error`, where the
+  review page already knows how to show it. The recording is **kept, not deleted** — the
+  part before the navigation is the part the tester wanted, and silently destroying their
+  session is a worse outcome than the one being avoided.
+- **What the blocklist does not promise, stated in three places.** The stop fires on
+  `webNavigation.onCommitted`, which is after the fact: MV3 removed blocking `webRequest`
+  and there is no earlier hook, so the end of that video can show the blocked page. Said
+  in the Settings panel, `docs/privacy.md` and `docs/architecture.md`, because a redaction
+  feature that overstates itself is worse than one that does not exist.
+- The two list fields **commit on blur**, not per keystroke. Parsing as the tester types
+  and rendering the parsed list back would discard the newline they just pressed and move
+  the cursor — the same "field that will not accept typing" failure the two-level settings
+  merge exists to prevent. `parseRedactionList` splits on newlines or commas, trims,
+  lower-cases and de-duplicates; both consumers compare against lower-cased values, so a
+  mixed-case entry would otherwise be a blocklist that silently matches nothing.
+- Docs corrected rather than appended to: `docs/roadmap.md` Phase 5 now lists what enforces
+  each guarantee, `docs/privacy.md` drops the "not built" note on the blocklist and gains
+  what it cannot promise, `docs/architecture.md` gains a **Redaction** section, and the
+  README's phase table and closing note match the code.
+
+
 ### Gemini as a second report provider
 - **Reports can be written by Gemini as well as Claude**, chosen in Settings. The reason
   is not model preference: neither a Claude Pro nor a Gemini Pro subscription includes

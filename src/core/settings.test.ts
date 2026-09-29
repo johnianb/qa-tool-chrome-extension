@@ -8,8 +8,10 @@ import {
   hasJira,
   saveJira,
   saveProvider,
+  saveRedaction,
   saveSettings,
 } from './settings';
+import { DEFAULT_REDACTION } from './events/redact';
 
 /** A minimal `chrome.storage.local` backed by a plain object. */
 let store: Record<string, unknown> = {};
@@ -189,5 +191,54 @@ describe('hasJira', () => {
   /** The issue type has a working default, so it is not part of "configured". */
   it('does not require the issue type to have been changed', () => {
     expect(hasJira({ ...DEFAULT_SETTINGS, jira: { ...complete, issueType: 'Bug' } })).toBe(true);
+  });
+});
+
+describe('redaction settings', () => {
+  it('defaults to both lists empty, so nothing is captured in full unasked', async () => {
+    const settings = await getSettings();
+    expect(settings.redaction).toEqual(DEFAULT_REDACTION);
+    expect(settings.redaction.allowValuesFor).toEqual([]);
+    expect(settings.redaction.blockedHosts).toEqual([]);
+  });
+
+  it('saves one list without disturbing the other', async () => {
+    await saveRedaction({ blockedHosts: ['admin.internal'] });
+    await saveRedaction({ allowValuesFor: ['orderId'] });
+
+    const settings = await getSettings();
+    expect(settings.redaction.blockedHosts).toEqual(['admin.internal']);
+    expect(settings.redaction.allowValuesFor).toEqual(['orderId']);
+  });
+
+  /** Arrays are replaced wholesale, not merged — removing the last host must empty it. */
+  it('lets a list be emptied again', async () => {
+    await saveRedaction({ blockedHosts: ['admin.internal'] });
+    await saveRedaction({ blockedHosts: [] });
+    expect((await getSettings()).redaction.blockedHosts).toEqual([]);
+  });
+
+  /**
+   * The same second-level merge the `jira` block needs. A record written before
+   * `redaction` existed must not read back `undefined`, which would throw on
+   * `blockedHosts.some` in the worker and refuse every recording.
+   */
+  it('fills in redaction for a record written before it existed', async () => {
+    store['settings'] = { provider: 'google', jira: DEFAULT_JIRA };
+    expect((await getSettings()).redaction).toEqual(DEFAULT_REDACTION);
+  });
+
+  it('fills in a field added to RedactionSettings after a tester last saved', async () => {
+    store['settings'] = { redaction: { blockedHosts: ['admin.internal'] } };
+
+    const { redaction } = await getSettings();
+    expect(redaction.blockedHosts).toEqual(['admin.internal']);
+    expect(redaction.allowValuesFor).toEqual([]);
+  });
+
+  it('does not leave the credentials behind when redaction is saved', async () => {
+    await saveProvider('anthropic', { apiKey: 'sk-ant-x' });
+    await saveRedaction({ blockedHosts: ['admin.internal'] });
+    expect((await getSettings()).anthropic.apiKey).toBe('sk-ant-x');
   });
 });

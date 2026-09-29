@@ -5,6 +5,7 @@
  * items are **milliseconds relative to `startedAt`**, never wall-clock — that is what
  * lets a step in the finished report seek the video to the moment it happened.
  */
+import type { RedactionSettings } from './events/redact';
 
 /** Where a session is in its lifecycle. */
 export type SessionStatus =
@@ -153,6 +154,17 @@ export interface RecordingState {
    * the reader misses it and there is nothing left to diagnose.
    */
   streamId: string;
+  /**
+   * The redaction settings this recording started under.
+   *
+   * Frozen here rather than read live for two reasons. A content script that loads after
+   * a mid-recording navigation asks the worker what it missed, and this is the only
+   * record of it by then — the worker's memory is routinely gone. And the settings a
+   * tester agreed to when they pressed Record are the ones the whole recording must be
+   * judged by; a mid-recording edit to the allowlist that retroactively widened capture
+   * would make the guarantee unstatable.
+   */
+  redaction: RedactionSettings;
 }
 
 export function newSessionId(): string {
