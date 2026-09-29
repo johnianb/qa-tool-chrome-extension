@@ -11,6 +11,7 @@ import { useCallback, useState } from 'react';
 import { formatOffset, type Keyframe, type Session } from '@/core/session';
 import { updateSession } from '@/core/storage/db';
 import { formatBytes } from '@/services/jira';
+import { downloadBlob, keyframeName } from '@/services/download';
 import { useObjectUrl } from './useObjectUrl';
 
 export function Screenshots({
@@ -73,6 +74,14 @@ export function Screenshots({
             onAskDelete={() => setConfirming(index)}
             onCancelDelete={() => setConfirming(null)}
             onConfirmDelete={() => void remove(index)}
+            /*
+              Per-frame, beside the per-frame delete. The header's Download menu takes all
+              of them at once, but the common errand is one frame for a chat message —
+              and this is where you are already looking at the one you want.
+            */
+            onDownload={() => {
+              void downloadBlob(frame.blob, keyframeName(session, index, frame.blob));
+            }}
           />
         ))}
       </ul>
@@ -87,6 +96,7 @@ function Thumbnail({
   onAskDelete,
   onCancelDelete,
   onConfirmDelete,
+  onDownload,
 }: {
   frame: Keyframe;
   onSeek: () => void;
@@ -94,6 +104,7 @@ function Thumbnail({
   onAskDelete: () => void;
   onCancelDelete: () => void;
   onConfirmDelete: () => void;
+  onDownload: () => void;
 }) {
   const url = useObjectUrl(frame.blob);
 
@@ -133,15 +144,26 @@ function Thumbnail({
           </span>
         </span>
       ) : (
-        <button
-          type="button"
-          onClick={onAskDelete}
-          title="Remove this screenshot from the recording"
-          aria-label={`Remove the screenshot at ${formatOffset(frame.t)}`}
-          className="absolute right-1 top-1 rounded bg-white/90 px-1.5 py-0.5 text-xs text-neutral-600 opacity-0 transition group-hover:opacity-100 focus:opacity-100 hover:text-red-600"
-        >
-          ✕
-        </button>
+        <span className="absolute right-1 top-1 flex gap-1 opacity-0 transition group-hover:opacity-100 focus-within:opacity-100">
+          <button
+            type="button"
+            onClick={onDownload}
+            title="Save this screenshot"
+            aria-label={`Save the screenshot at ${formatOffset(frame.t)}`}
+            className="rounded bg-white/90 px-1.5 py-0.5 text-xs text-neutral-600 hover:text-neutral-900"
+          >
+            ⤓
+          </button>
+          <button
+            type="button"
+            onClick={onAskDelete}
+            title="Remove this screenshot from the recording"
+            aria-label={`Remove the screenshot at ${formatOffset(frame.t)}`}
+            className="rounded bg-white/90 px-1.5 py-0.5 text-xs text-neutral-600 hover:text-red-600"
+          >
+            ✕
+          </button>
+        </span>
       )}
     </li>
   );

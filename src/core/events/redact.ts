@@ -1,9 +1,9 @@
 /**
  * Decides what a captured value is allowed to say.
  *
- * Scheduled for Phase 5, written in Phase 2 on purpose: the moment any code captures a
- * typed value, the rules about what may be kept have to already exist. Adding them
- * afterwards means a window during which real credentials are written to disk, and
+ * Written in Phase 2 although it belonged to Phase 5, on purpose: the moment any code
+ * captures a typed value, the rules about what may be kept have to already exist. Adding
+ * them afterwards means a window during which real credentials are written to disk, and
  * "we'll redact it later" does not un-write them.
  *
  * The default is to describe a value's *shape*, never its content — "typed 14
@@ -132,6 +132,24 @@ export function scrubUrl(raw: string): string {
   } catch {
     return scrubText(raw);
   }
+}
+
+/**
+ * Parse a box of entries typed by a tester into a redaction list.
+ *
+ * Newline *or* comma separated, because both are what people actually type into a field
+ * listing hostnames. Entries are lower-cased and de-duplicated: `isBlockedHost` compares
+ * against a hostname, which `URL` already lower-cases, and `describeValue` lower-cases
+ * the field name it looks up — so an entry saved in mixed case would silently never
+ * match anything, which is the worst way for a blocklist to fail.
+ */
+export function parseRedactionList(raw: string): string[] {
+  const entries = new Set<string>();
+  for (const entry of raw.split(/[\n,]/)) {
+    const trimmed = entry.trim().toLowerCase();
+    if (trimmed) entries.add(trimmed);
+  }
+  return [...entries];
 }
 
 /** True when recording on this host is forbidden by the user's settings. */

@@ -42,7 +42,7 @@ Under construction. See [`docs/roadmap.md`](docs/roadmap.md) for what works toda
 | 2 | Event capture, deterministic Markdown report | Built |
 | 3 | Report generation — Claude or Gemini | Built |
 | 4 | Review page editing, Jira export | Built |
-| 5 | Redaction and hardening | Not started |
+| 5 | Redaction and hardening | Built |
 
 Reports need an API key for one of the two providers — see
 [`docs/setup.md`](docs/setup.md). Neither a Claude Pro nor a Gemini Pro subscription
@@ -103,6 +103,8 @@ recorded — Chrome does not permit it.
 
 ## A note on what you record
 
-Recordings capture whatever is on screen, including customer data. Redaction of typed
-values is built in (Phase 5), but screenshots and video are not automatically scrubbed.
-Read [`docs/privacy.md`](docs/privacy.md) before recording against production.
+Recordings capture whatever is on screen, including customer data. Typed values are
+recorded as their *shape* — "14 characters" — password and card fields not at all, and
+hosts you list in Settings are refused outright. **Screenshots and video are not
+scrubbed**, and a Jira export uploads both. Read
+[`docs/privacy.md`](docs/privacy.md) before recording against production.

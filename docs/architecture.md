@@ -101,6 +101,56 @@ This is what makes the report and the video one artifact rather than two. Each s
 the generated report carries the `t` of the event it came from, so clicking a step seeks
 the player. It costs nothing at capture time and cannot be reconstructed afterwards.
 
+## Redaction
+
+`src/core/events/redact.ts` decides what a captured value is allowed to say. It was
+written in Phase 2 even though it belonged to Phase 5, because the alternative is a
+period during which real credentials are written to disk and "we'll redact it later" does
+not un-write them.
+
+**It runs at capture time, not on the way out.** `describeValue` and `scrubText` are
+called in the content script and `scrubUrl` in the worker — both *before* the value
+reaches `updateSession`, so an unredacted value never sits in IndexedDB at all. A pass
+that ran at export time would leave the recording on disk as the thing it was protecting
+against.
+
+Two lists are configurable, and both default to empty:
+
+- `allowValuesFor` — field names whose values may be stored verbatim. Opt-in, because the
+  safe default has to be the one you get by not configuring anything.
+- `blockedHosts` — hosts that are not recorded.
+
+### Why the settings travel with the start message
+
+The content script runs in **every frame** of the recorded tab, so reading
+`chrome.storage` there is a read per frame. More importantly the settings have to be the
+ones in force when Record was pressed: a mid-recording edit that retroactively widened
+capture would make the guarantee unstatable, and a value already described as "14
+characters" cannot be un-described.
+
+So the worker reads them once in `startRecording`, freezes them into `RecordingState`, and
+sends them with `CAPTURE_START`. A frame that loads later — after a mid-recording
+navigation — asks `AM_I_RECORDED` and gets them back from the same record, which is the
+only copy that survives the worker's routine death. The content script's own default is
+`DEFAULT_REDACTION`, so a script capturing without having been told what is permitted
+captures the *least*, not the most.
+
+### What the blocklist can and cannot promise
+
+Starting a recording on a blocked host is refused before a stream id is even acquired, and
+a recording whose tab navigates onto one is stopped.
+
+But the stop fires on `webNavigation.onCommitted`, which is *after* the navigation has
+happened. MV3 removed blocking `webRequest` and there is no earlier hook, so the last
+moments of the video can show the blocked page. The recording is kept rather than deleted —
+the part before the navigation is the part the tester wanted — and the reason is written to
+`session.error`, where the review page already knows how to show it. The blocklist prevents
+a recording, not a glimpse, and both this and `docs/privacy.md` say so: a redaction feature
+that overstates itself is worse than one that does not exist.
+
+Screenshots and video are outside all of this. They are pixels, and nothing here touches
+them; the only control is the **Send screenshots with the log** toggle.
+
 ## Report generation
 
 The structured log plus up to six keyframes goes to the configured model and comes back
@@ -148,8 +198,8 @@ button in it, and it shares the extension's origin — so the host permission fo
 was the part worth proving. A closed tab is a
 visible failure; a dead worker is not.
 
-This also keeps the SDK out of the worker bundle: `background.js` is 12 kB, and the
-531 kB of SDK, React and zod loads only on the page that uses it.
+This also keeps the SDK out of the worker bundle: `background.js` is 14 kB, and the
+566 kB of SDK, React and zod loads only on the page that uses it.
 
 ## Jira export
 

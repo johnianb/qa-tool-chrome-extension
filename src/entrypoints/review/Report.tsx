@@ -20,10 +20,17 @@ export function ReportPanel({
   session,
   settings,
   onChanged,
+  onOpenSettings,
 }: {
   session: Session;
   settings: Settings | null;
   onChanged: () => void;
+  /**
+   * Settings no longer open themselves when no key is set, so this notice is the way in.
+   * A message naming a panel the reader has to go and find is a dead end — the Jira
+   * panel has made its equivalent clickable since it was written.
+   */
+  onOpenSettings: () => void;
 }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -113,8 +120,14 @@ export function ReportPanel({
 
       {!ready && (
         <p className="mt-3 text-sm text-neutral-500">
-          Add a{writer === 'Claude' ? 'n Anthropic' : ' Gemini'} API key in Report
-          generation settings to write reports.
+          <button
+            type="button"
+            onClick={onOpenSettings}
+            className="underline hover:text-neutral-900"
+          >
+            Add a{writer === 'Claude' ? 'n Anthropic' : ' Gemini'} API key
+          </button>{' '}
+          to write reports. Everything else on this page works without one.
         </p>
       )}
 

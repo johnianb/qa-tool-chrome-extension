@@ -4,6 +4,7 @@
  * handler rather than leaving it to fail silently at runtime.
  */
 import type { ConsoleEntry, InteractionEvent, NetworkEntry } from './session';
+import type { RedactionSettings } from './events/redact';
 
 /** popup → worker */
 export type PopupMessage =
@@ -38,7 +39,13 @@ export type OffscreenReply =
 
 /** worker → content script */
 export type CaptureMessage =
-  | { type: 'CAPTURE_START'; sessionId: string; startedAt: number }
+  /**
+   * `redaction` travels with the start message rather than being read from
+   * `chrome.storage` by the content script. This script runs in *every frame* of the
+   * recorded tab, so a storage read per frame is a read per frame; and the settings must
+   * be the ones in force when Record was pressed, which only the worker knows.
+   */
+  | { type: 'CAPTURE_START'; sessionId: string; startedAt: number; redaction: RedactionSettings }
   | { type: 'CAPTURE_STOP' };
 
 /** content script → worker */
@@ -54,6 +61,8 @@ export interface CaptureStatus {
   recording: boolean;
   sessionId?: string;
   startedAt?: number;
+  /** Present whenever `recording` is true — the settings the session started under. */
+  redaction?: RedactionSettings;
 }
 
 /**

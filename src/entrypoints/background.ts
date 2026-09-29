@@ -14,7 +14,8 @@ import type {
   PopupState,
 } from '@/core/messages';
 import { captureKeyframe, MIN_CAPTURE_INTERVAL_MS } from '@/core/keyframes';
-import { scrubUrl } from '@/core/events/redact';
+import { isBlockedHost, scrubUrl } from '@/core/events/redact';
+import { getSettings } from '@/core/settings';
 import {
   clearRecordingState,
   getRecordingState,
@@ -35,7 +36,19 @@ interface ProbeInfo {
   at: number;
   url: string;
   errors: string[];
+  /** Which `chrome.*` APIs that context actually had. Absent from older reports. */
+  apis?: { runtime: boolean; storage: boolean; storageSession: boolean };
 }
+
+/**
+ * Where the worker keeps the last probe report.
+ *
+ * The *worker* writes this, not the probe. An offscreen document is granted
+ * `chrome.runtime` and nothing else, so its own `chrome.storage.local.set` could never
+ * have worked — which meant nothing ever wrote this key and `describeProbe` reported
+ * "never ran" every single time, in exactly the failure it exists to explain.
+ */
+const PROBE_KEY = 'offscreenProbe';
 
 export default defineBackground(() => {
   chrome.runtime.onMessage.addListener((
@@ -85,7 +98,7 @@ export default defineBackground(() => {
         return true;
 
       case 'OFFSCREEN_PROBE':
-        console.info('[qa-bug-reporter] offscreen probe reported in', message.info);
+        void onOffscreenProbe(message.info);
         return false;
 
       case 'OFFSCREEN_TRACE':
@@ -115,6 +128,12 @@ export default defineBackground(() => {
     if (frameId !== 0) return; // top frame only; subframe loads are noise
     const state = await getRecordingState();
     if (!state || state.tabId !== tabId) return;
+
+    if (isBlockedHost(url, state.redaction)) {
+      await onBlockedNavigation(state.sessionId, url);
+      return;
+    }
+
     await updateSession(state.sessionId, (session) => {
       session.events.push({
         t: Math.max(0, Date.now() - session.startedAt),
@@ -164,6 +183,17 @@ async function startRecording(): Promise<{ sessionId: string }> {
     throw new Error('Browser-internal pages cannot be recorded.');
   }
 
+  // Checked before the stream id is acquired, so a blocked host never reaches a capture
+  // API at all — the refusal is the whole point of the setting, and a stream acquired
+  // and then dropped is a worse implementation of it than one never asked for.
+  const settings = await getSettings();
+  if (isBlockedHost(tab.url, settings.redaction)) {
+    throw new Error(
+      `${hostOf(tab.url)} is on the blocked-hosts list in Settings, so it cannot be ` +
+        'recorded. Remove it there if this was not intended.',
+    );
+  }
+
   // Must be called from the worker, and only redeemable by this extension.
   const streamId = await chrome.tabCapture.getMediaStreamId({ targetTabId: tab.id });
 
@@ -171,7 +201,13 @@ async function startRecording(): Promise<{ sessionId: string }> {
   const startedAt = Date.now();
 
   await putSession(blankSession(sessionId, startedAt, await environment(tab)));
-  await setRecordingState({ sessionId, tabId: tab.id, startedAt, streamId });
+  await setRecordingState({
+    sessionId,
+    tabId: tab.id,
+    startedAt,
+    streamId,
+    redaction: settings.redaction,
+  });
   await appendTrace(sessionId, 'worker', `stream id acquired for tab ${tab.id}`);
 
   // Hand the parameters over through storage *before* the document exists, so there is
@@ -207,7 +243,12 @@ async function startRecording(): Promise<{ sessionId: string }> {
   }
 
   // Content scripts are already loaded and idle; tell them a recording has begun.
-  await tellTab(tab.id, { type: 'CAPTURE_START', sessionId, startedAt });
+  await tellTab(tab.id, {
+    type: 'CAPTURE_START',
+    sessionId,
+    startedAt,
+    redaction: settings.redaction,
+  });
 
   console.info(`[qa-bug-reporter] recording ${sessionId} on tab ${tab.id}`);
   await setBadge('REC', '#d92d20');
@@ -240,6 +281,44 @@ async function stopRecording(): Promise<{ sessionId: string | null }> {
   await setBadge('', '#000000');
 
   return { sessionId: state.sessionId };
+}
+
+/**
+ * Stop a recording whose tab has navigated onto a blocked host.
+ *
+ * **This fires on `onCommitted`, which is after the navigation has already happened.**
+ * MV3 removed blocking `webRequest`, so there is no hook that runs first — the blocklist
+ * can refuse to *start* a recording on a blocked host and can stop one that arrives
+ * there, but it cannot promise the page was never captured. The final moments of the
+ * video may show it. Said plainly here and in `docs/privacy.md`, because a redaction
+ * feature that overstates itself is worse than one that does not exist.
+ *
+ * The recording is kept rather than deleted. The part before the navigation is the part
+ * the tester wanted, and silently destroying their session is a worse outcome than the
+ * one being avoided — so the reason goes on the session, where the review page already
+ * knows how to show it.
+ */
+async function onBlockedNavigation(sessionId: string, url: string): Promise<void> {
+  const host = hostOf(url);
+  console.warn(`[qa-bug-reporter] stopping ${sessionId}: navigated to blocked host ${host}`);
+  await appendTrace(sessionId, 'worker', `blocked host reached: ${host}`);
+  await stopRecording();
+  await updateSession(sessionId, (session) => {
+    session.error =
+      `Recording stopped: the tab navigated to ${host}, which is on the blocked-hosts ` +
+      'list in Settings. Everything captured before that point has been kept — but ' +
+      'because a navigation cannot be intercepted before it commits, the end of the ' +
+      'video may show that page.';
+  });
+}
+
+/** Hostname for a message to a tester, or the raw value if it will not parse. */
+function hostOf(url: string): string {
+  try {
+    return new URL(url).hostname;
+  } catch {
+    return url;
+  }
 }
 
 async function onRecordingSaved(sessionId: string, bytes: number): Promise<void> {
@@ -352,7 +431,12 @@ async function tellTab(tabId: number, message: CaptureMessage): Promise<void> {
 async function captureStatus(sender: chrome.runtime.MessageSender): Promise<CaptureStatus> {
   const state = await getRecordingState();
   if (!state || sender.tab?.id !== state.tabId) return { recording: false };
-  return { recording: true, sessionId: state.sessionId, startedAt: state.startedAt };
+  return {
+    recording: true,
+    sessionId: state.sessionId,
+    startedAt: state.startedAt,
+    redaction: state.redaction,
+  };
 }
 
 /** Diagnostics forwarded from the offscreen document, which has no durable console. */
@@ -362,23 +446,43 @@ async function onOffscreenTrace(sessionId: string, line: string): Promise<void> 
 }
 
 /**
+ * Persist the probe report, because the probe itself cannot.
+ *
+ * `chrome.runtime` is the only API an offscreen document is granted, so the message is
+ * the whole channel. Storing it here is what makes `describeProbe` able to answer at
+ * all — and it must survive the worker restarting between the probe arriving and a
+ * failure being diagnosed, which is why it goes to `storage.local` rather than a
+ * module variable.
+ */
+async function onOffscreenProbe(info: ProbeInfo): Promise<void> {
+  console.info('[qa-bug-reporter] offscreen probe reported in', info);
+  await chrome.storage.local.set({ [PROBE_KEY]: info });
+}
+
+/**
  * Whether the offscreen document's classic load probe ran.
  *
  * Present means the document loaded and executes scripts, so the fault is in the
- * recorder module. Absent means the document never ran anything at all.
+ * recorder module rather than in the document ever existing.
+ *
+ * Absent is **not** proof the document ran nothing. The report arrives by runtime
+ * message, so it is also absent when the message could not be delivered — a worker that
+ * was asleep, or a document torn down before its first script finished. The wording says
+ * what is known rather than concluding; the previous version asserted "the document
+ * executed no scripts" and, because nothing ever wrote this key, said it every time.
  */
 async function describeProbe(): Promise<string> {
-  const local = await chrome.storage.local.get('offscreenProbe');
-  const probe = local['offscreenProbe'] as ProbeInfo | undefined;
-  if (!probe) return 'never ran — the document executed no scripts';
+  const local = await chrome.storage.local.get(PROBE_KEY);
+  const probe = local[PROBE_KEY] as ProbeInfo | undefined;
+  if (!probe) {
+    return 'no report — either the document ran no scripts, or its message never arrived';
+  }
 
-  const session = await chrome.storage.session.get('offscreenProbeSession');
-  const sessionOk = session['offscreenProbeSession'] !== undefined;
+  const apis = probe.apis
+    ? ` apis=[runtime:${probe.apis.runtime} storage:${probe.apis.storage}]`
+    : '';
   const errors = probe.errors.length > 0 ? ` errors=[${probe.errors.join('; ')}]` : '';
-  return (
-    `ran ${Date.now() - probe.at}ms ago, storage.session ` +
-    `${sessionOk ? 'available' : 'UNAVAILABLE in offscreen'}${errors}`
-  );
+  return `ran ${Date.now() - probe.at}ms ago at ${probe.url}${apis}${errors}`;
 }
 
 /** What Chrome reports about the offscreen document, for the failure trace. */

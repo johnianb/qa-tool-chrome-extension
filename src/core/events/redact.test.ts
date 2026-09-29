@@ -4,6 +4,7 @@ import {
   describeValue,
   isBlockedHost,
   isSensitiveField,
+  parseRedactionList,
   scrubText,
   scrubUrl,
 } from './redact';
@@ -111,5 +112,35 @@ describe('isBlockedHost', () => {
 
   it('does not block a lookalike host', () => {
     expect(isBlockedHost('https://notadmin.internal/x', settings)).toBe(false);
+  });
+});
+
+describe('parseRedactionList', () => {
+  it('splits on newlines and commas, trimming each entry', () => {
+    expect(parseRedactionList('admin.internal\n billing.test ,ops.test')).toEqual([
+      'admin.internal',
+      'billing.test',
+      'ops.test',
+    ]);
+  });
+
+  it('drops blank lines rather than saving an empty entry', () => {
+    // An empty string in `blockedHosts` would match nothing, but an empty string in
+    // `allowValuesFor` matches a field with no name or id — which is a great many of them.
+    expect(parseRedactionList('a.test\n\n\n  \n,,b.test')).toEqual(['a.test', 'b.test']);
+    expect(parseRedactionList('   ')).toEqual([]);
+  });
+
+  /** Both consumers compare against lower-cased values, so a mixed-case entry would never match. */
+  it('lower-cases and de-duplicates', () => {
+    expect(parseRedactionList('Admin.Internal\nadmin.internal\nORDERID')).toEqual([
+      'admin.internal',
+      'orderid',
+    ]);
+  });
+
+  it('round-trips a list through the textarea representation', () => {
+    const list = ['admin.internal', 'billing.test'];
+    expect(parseRedactionList(list.join('\n'))).toEqual(list);
   });
 });

@@ -17,7 +17,12 @@ import {
 import type { ConsoleEntry, InteractionEvent, NetworkEntry } from '@/core/session';
 import { labelElement, labelToPhrase } from '@/core/events/labeller';
 import { buildSelector } from '@/core/events/selector';
-import { DEFAULT_REDACTION, describeValue, scrubText } from '@/core/events/redact';
+import {
+  DEFAULT_REDACTION,
+  describeValue,
+  scrubText,
+  type RedactionSettings,
+} from '@/core/events/redact';
 
 export default defineContentScript({
   matches: ['<all_urls>'],
@@ -26,6 +31,16 @@ export default defineContentScript({
 
   main() {
     let session: { id: string; startedAt: number } | null = null;
+    /**
+     * The redaction settings this recording is running under.
+     *
+     * Delivered by the worker with the start message rather than read from storage here:
+     * this script runs in every frame, and the settings that matter are the ones in force
+     * when Record was pressed. The default stands until a recording starts, and is
+     * restored when one ends, so a script that somehow captures without being told what
+     * is permitted captures the *least* — not the most.
+     */
+    let redaction: RedactionSettings = DEFAULT_REDACTION;
     let events: InteractionEvent[] = [];
     let consoleEntries: ConsoleEntry[] = [];
     let networkEntries: NetworkEntry[] = [];
@@ -101,7 +116,7 @@ export default defineContentScript({
           type: 'change',
           label,
           selector,
-          value: describeValue(target, value, DEFAULT_REDACTION),
+          value: describeValue(target, value, redaction),
         });
       };
 
@@ -169,11 +184,13 @@ export default defineContentScript({
       detach?.();
       detach = null;
       session = null;
+      redaction = DEFAULT_REDACTION;
     }
 
     chrome.runtime.onMessage.addListener((message: CaptureMessage) => {
       if (message.type === 'CAPTURE_START') {
         session = { id: message.sessionId, startedAt: message.startedAt };
+        redaction = message.redaction;
         startCapturing();
       } else if (message.type === 'CAPTURE_STOP') {
         stopCapturing();
@@ -188,6 +205,7 @@ export default defineContentScript({
       .then((status: CaptureStatus | undefined) => {
         if (!status?.recording || !status.sessionId || status.startedAt === undefined) return;
         session = { id: status.sessionId, startedAt: status.startedAt };
+        redaction = status.redaction ?? DEFAULT_REDACTION;
         startCapturing();
         record({ type: 'navigate', label: `loaded ${location.pathname}` });
       })

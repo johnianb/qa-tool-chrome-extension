@@ -10,6 +10,7 @@
  * anyone who can open its DevTools, and the credentials are theirs. They are kept off
  * the network and out of sync, which is the part that matters.
  */
+import { DEFAULT_REDACTION, type RedactionSettings } from './events/redact';
 
 /**
  * Jira Cloud connection details.
@@ -74,12 +75,21 @@ export interface Settings {
   /**
    * Whether keyframe screenshots are sent along with the event log.
    *
-   * Screenshots are pixels, and Phase 5's redaction cannot touch them — a frame of a
-   * patient record is legible to anything that receives it. The event log is already
-   * shape-only; images are not. This toggle is the only control over that, so it is a
-   * setting rather than a constant.
+   * Screenshots are pixels, and no redaction reaches them — a frame of a patient record
+   * is legible to anything that receives it. The event log is already shape-only; images
+   * are not, and `redaction` below does nothing for them. This toggle is the only control
+   * over that, so it is a setting rather than a constant.
    */
   sendScreenshots: boolean;
+  /**
+   * What the capture layer is allowed to record.
+   *
+   * Read once, at record-start, and handed to the content scripts with the start message
+   * rather than read live by each frame — see `RecordingState.redaction`. The safe
+   * defaults are both empty, because a redaction setting whose default weakens capture
+   * would protect only the testers who went looking for it.
+   */
+  redaction: RedactionSettings;
   jira: JiraSettings;
 }
 
@@ -106,6 +116,7 @@ export const DEFAULT_SETTINGS: Settings = {
   anthropic: DEFAULT_PROVIDERS.anthropic,
   google: DEFAULT_PROVIDERS.google,
   sendScreenshots: true,
+  redaction: DEFAULT_REDACTION,
   jira: DEFAULT_JIRA,
 };
 
@@ -141,6 +152,7 @@ export async function getSettings(): Promise<Settings> {
       ...(saved.anthropic ?? {}),
     },
     google: { ...DEFAULT_PROVIDERS.google, ...(saved.google ?? {}) },
+    redaction: { ...DEFAULT_REDACTION, ...(saved.redaction ?? {}) },
     jira: { ...DEFAULT_JIRA, ...(saved.jira ?? {}) },
   };
 }
@@ -159,6 +171,18 @@ export async function saveProvider(
 ): Promise<Settings> {
   const current = await getSettings();
   return write({ ...current, [provider]: { ...current[provider], ...patch } });
+}
+
+/**
+ * Save the redaction lists.
+ *
+ * Takes effect on the *next* recording. A recording in progress keeps the settings it
+ * started with, which is the only interpretation that holds: a value already described
+ * as "14 characters" cannot be un-described by adding its field to the allowlist later.
+ */
+export async function saveRedaction(patch: Partial<RedactionSettings>): Promise<Settings> {
+  const current = await getSettings();
+  return write({ ...current, redaction: { ...current.redaction, ...patch } });
 }
 
 export async function saveJira(patch: Partial<JiraSettings>): Promise<Settings> {
